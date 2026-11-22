@@ -312,6 +312,16 @@ export class GameStore {
       : [];
     const myVote = votes.find((v) => v.voterId === self?.id);
     const mafiaAwake = awake && window === "mafia";
+    const accountPlayers = new Set(
+      this.db
+        .prepare(
+          `SELECT players.id FROM players
+           JOIN accounts ON accounts.profile_id = players.profile_id
+           WHERE players.game_id = ?`,
+        )
+        .all(game.id)
+        .map((row) => String(row.id)),
+    );
     return {
       code,
       isGm,
@@ -330,6 +340,7 @@ export class GameStore {
           return {
             id: p.id,
             name: p.name,
+            isGuest: !accountPlayers.has(p.id),
             alive: p.alive,
             role: reveal ? p.role : null,
             originalRole: reveal ? p.originalRole : null,

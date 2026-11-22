@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import request from "supertest";
 import { createApp } from "./app.js";
@@ -12,6 +12,8 @@ beforeEach(() => {
   backend = createApp(db);
 });
 afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
   backend.closeStreams();
   db.close();
 });
@@ -47,6 +49,310 @@ const command = async (client: Browser, code: string, value: unknown) => {
   });
 };
 
+it("labels guests and accounts without exposing login details or allowing duplicate table names", async () => {
+  const gm = await browser();
+  const guest = await browser();
+  const member = await browser();
+  const { code } = (await post(gm.client, "/games", {}).expect(201)).body;
+  await post(guest.client, `/games/${code}/join`, { name: "Aino" }).expect(200);
+  await register(member.client, "privatelogin");
+  const duplicate = await post(member.client, `/games/${code}/join`, {
+    name: "aino",
+  }).expect(400);
+  expect(duplicate.body.error).toBe("duplicateName");
+  await post(member.client, `/games/${code}/join`, { name: "Aino K" }).expect(
+    200,
+  );
+  const table = (await guest.client.get(`/api/games/${code}`).expect(200)).body;
+  expect(table.players).toEqual([
+    expect.objectContaining({ name: "Aino", isGuest: true }),
+    expect.objectContaining({ name: "Aino K", isGuest: false }),
+  ]);
+  expect(JSON.stringify(table)).not.toContain("privatelogin");
+  for (const player of table.players) {
+    expect(player).not.toHaveProperty("email");
+    expect(player).not.toHaveProperty("profileId");
+    expect(player.role).toBeNull();
+  }
+
+  await register(guest.client, "newmember");
+  const updated = (await gm.client.get(`/api/games/${code}`).expect(200)).body;
+  expect(
+    updated.players.find((player: { name: string }) => player.name === "Aino"),
+  ).toMatchObject({
+    id: table.players[0].id,
+    isGuest: false,
+  });
+});
+
+it("requires email verification before creating an email-mode account and keeps the guest's games", async () => {
+  const messages: { to: string; text: string }[] = [];
+  backend = createApp(db, {
+    publicOrigin: "https://mafia.example",
+    email: {
+      send: async (message: { to: string; text: string }) => {
+        messages.push(message);
+      },
+    },
+  });
+  const first = await browser();
+  expect(first.identity).toMatchObject({ isGuest: true, emailEnabled: true });
+  const game = (await post(first.client, "/games", {}).expect(201)).body;
+  await post(first.client, "/auth/register", {
+    username: "emailed",
+    password,
+    confirmPassword: password,
+  }).expect(400);
+  const pending = (
+    await post(first.client, "/auth/register", {
+      username: "emailed",
+      password,
+      confirmPassword: password,
+      email: " Player@Example.com ",
+      language: "en",
+    }).expect(202)
+  ).body;
+  expect(pending.identity).toMatchObject({
+    id: first.identity.id,
+    isGuest: true,
+    pendingEmail: "player@example.com",
+  });
+  expect(pending.recoveryCode).toBeUndefined();
+  expect(messages).toHaveLength(1);
+  expect(messages[0].to).toBe("player@example.com");
+  const code = messages[0].text.match(/^\d{6}$/m)?.[0];
+  expect(code).toMatch(/^\d{6}$/);
+  await login(first.client, "emailed").expect(401);
+  const verified = (
+    await post(first.client, "/auth/verify-email", { code }).expect(201)
+  ).body;
+  expect(verified.identity).toMatchObject({
+    id: first.identity.id,
+    username: "emailed",
+    isGuest: false,
+    email: "player@example.com",
+    pendingEmail: null,
+  });
+  expect(verified.recoveryCode).toBeUndefined();
+  expect((await first.client.get("/api/games").expect(200)).body).toEqual([
+    expect.objectContaining({ code: game.code }),
+  ]);
+  const second = await browser();
+  await login(second.client, "PLAYER@EXAMPLE.COM").expect(200);
+});
+
+it("recovers by a private single-use email link without revealing whether an address has an account", async () => {
+  const messages: { to: string; text: string }[] = [];
+  backend = createApp(db, {
+    publicOrigin: "https://mafia.example",
+    email: {
+      send: async (message) => {
+        messages.push(message);
+      },
+    },
+  });
+  const first = await browser();
+  await post(first.client, "/auth/register", {
+    username: "emailed",
+    password,
+    confirmPassword: password,
+    email: "player@example.com",
+    language: "en",
+  }).expect(202);
+  await post(first.client, "/auth/verify-email", {
+    code: messages[0].text.match(/^\d{6}$/m)?.[0],
+  }).expect(201);
+  const second = await browser();
+  await login(second.client, "emailed").expect(200);
+  const recovering = await browser();
+  const known = await post(recovering.client, "/auth/request-reset", {
+    email: "PLAYER@example.com",
+    language: "en",
+  }).expect(202);
+  const unknown = await post(recovering.client, "/auth/request-reset", {
+    email: "unknown@example.com",
+    language: "en",
+  }).expect(202);
+  expect(known.body).toEqual(unknown.body);
+  expect(messages).toHaveLength(2);
+  const link = new URL(messages[1].text.match(/https:\/\/\S+/)![0]);
+  expect(link.origin).toBe("https://mafia.example");
+  expect(link.searchParams.has("token")).toBe(false);
+  const token = new URLSearchParams(link.hash.slice(1)).get("token");
+  expect(token).toMatch(/^[A-Za-z0-9_-]{43}$/);
+  expect(known.text).not.toContain(token);
+  const body = {
+    token,
+    password: "another long secret passphrase",
+    confirmPassword: "another long secret passphrase",
+  };
+  const reset = await post(
+    recovering.client,
+    "/auth/reset-password",
+    body,
+  ).expect(200);
+  expect(reset.body.identity.id).toBe(recovering.identity.id);
+  expect(reset.body.recoveryCode).toBeUndefined();
+  await first.client.get("/api/games").expect(401);
+  await second.client.get("/api/games").expect(401);
+  await post(recovering.client, "/auth/reset-password", body).expect(400);
+  await login(recovering.client, "emailed", password).expect(401);
+  await login(recovering.client, "emailed", body.password).expect(200);
+});
+
+it("limits verification attempts, binds codes to the requesting guest and safely resends expired codes", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  const messages: { text: string; html: string }[] = [];
+  backend = createApp(db, {
+    publicOrigin: "https://mafia.example",
+    email: {
+      send: async (message) => {
+        messages.push(message);
+      },
+    },
+  });
+  const first = await browser();
+  await post(first.client, "/auth/register", {
+    username: "emailed",
+    password,
+    confirmPassword: password,
+    email: "player@example.com",
+    language: "en",
+  }).expect(202);
+  const code = messages[0].text.match(/^\d{6}$/m)![0];
+  const stranger = await browser();
+  await post(stranger.client, "/auth/verify-email", { code }).expect(400);
+  const wrong = code === "000000" ? "111111" : "000000";
+  for (let attempt = 0; attempt < 5; attempt++) {
+    await post(first.client, "/auth/verify-email", { code: wrong }).expect(400);
+  }
+  await post(first.client, "/auth/verify-email", { code }).expect(400);
+  await post(first.client, "/auth/resend-verification", {
+    language: "en",
+  }).expect(429);
+  vi.setSystemTime(Date.now() + 61_000);
+  await post(first.client, "/auth/resend-verification", {
+    language: "fi",
+  }).expect(202);
+  expect(messages).toHaveLength(2);
+  expect(messages[1].text).toContain("Syötä tämä koodi");
+  const resentCode = messages[1].text.match(/^\d{6}$/m)![0];
+  vi.setSystemTime(Date.now() + 16 * 60_000);
+  await post(first.client, "/auth/verify-email", { code: resentCode }).expect(
+    400,
+  );
+  await post(first.client, "/auth/resend-verification", {
+    language: "fa",
+  }).expect(202);
+  expect(messages[2].html).toContain('lang="fa" dir="rtl"');
+  expect(messages[2].text).toContain("کد تا ۱۵ دقیقه معتبر است.");
+  const freshCode = messages[2].text.match(/^\d{6}$/m)![0];
+  const persianCode = freshCode.replace(
+    /\d/g,
+    (digit) => "۰۱۲۳۴۵۶۷۸۹"[Number(digit)],
+  );
+  await post(first.client, "/auth/verify-email", { code: persianCode }).expect(
+    201,
+  );
+  await post(first.client, "/auth/verify-email", { code: freshCode }).expect(
+    400,
+  );
+});
+
+it("reports verification delivery failures without creating an account and allows the guest to resume", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+  const messages: { text: string }[] = [];
+  let available = false;
+  backend = createApp(db, {
+    publicOrigin: "https://mafia.example",
+    email: {
+      send: async (message) => {
+        if (!available) throw new Error("Test mail provider unavailable");
+        messages.push(message);
+      },
+    },
+  });
+  const first = await browser();
+  const response = await post(first.client, "/auth/register", {
+    username: "emailed",
+    password,
+    confirmPassword: password,
+    email: "player@example.com",
+  }).expect(503);
+  expect(response.body.error).toBe("emailUnavailable");
+  expect(logged).toHaveBeenCalled();
+  expect((await first.client.get("/api/me")).body).toMatchObject({
+    isGuest: true,
+    pendingEmail: "player@example.com",
+  });
+  await login(first.client, "emailed").expect(401);
+  available = true;
+  vi.setSystemTime(Date.now() + 61_000);
+  await post(first.client, "/auth/resend-verification", {}).expect(202);
+  await post(first.client, "/auth/verify-email", {
+    code: messages[0].text.match(/^\d{6}$/m)?.[0],
+  }).expect(201);
+});
+
+it("expires reset links and invalidates them when account credentials change", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  const messages: { text: string }[] = [];
+  backend = createApp(db, {
+    publicOrigin: "https://mafia.example",
+    email: {
+      send: async (message) => {
+        messages.push(message);
+      },
+    },
+  });
+  const first = await browser();
+  await post(first.client, "/auth/register", {
+    username: "emailed",
+    password,
+    confirmPassword: password,
+    email: "player@example.com",
+  }).expect(202);
+  await post(first.client, "/auth/verify-email", {
+    code: messages[0].text.match(/^\d{6}$/m)?.[0],
+  }).expect(201);
+  const recovering = await browser();
+  const resetToken = async () => {
+    await post(recovering.client, "/auth/request-reset", {
+      email: "player@example.com",
+    }).expect(202);
+    const link = new URL(messages.at(-1)!.text.match(/https:\/\/\S+/)![0]);
+    return new URLSearchParams(link.hash.slice(1)).get("token");
+  };
+  const body = {
+    password: "a replacement secret passphrase",
+    confirmPassword: "a replacement secret passphrase",
+  };
+  const expired = await resetToken();
+  vi.setSystemTime(Date.now() + 31 * 60_000);
+  await post(recovering.client, "/auth/reset-password", {
+    ...body,
+    token: expired,
+  }).expect(400);
+  const beforeChange = await resetToken();
+  await post(first.client, "/account/password", {
+    ...body,
+    currentPassword: password,
+  }).expect(200);
+  await post(recovering.client, "/auth/reset-password", {
+    ...body,
+    token: beforeChange,
+  }).expect(400);
+  const beforeCode = await resetToken();
+  await post(first.client, "/account/recovery", {
+    password: body.password,
+  }).expect(200);
+  await post(recovering.client, "/auth/reset-password", {
+    ...body,
+    token: beforeCode,
+  }).expect(400);
+});
+
 it("keeps guest games on registration and recovers the same profile on another device", async () => {
   const first = await browser();
   const game = (await post(first.client, "/games", {}).expect(201)).body;
@@ -55,6 +361,9 @@ it("keeps guest games on registration and recovers the same profile on another d
     id: first.identity.id,
     username: "aino",
     isGuest: false,
+    emailEnabled: false,
+    email: null,
+    pendingEmail: null,
   });
   expect(registered.recoveryCode).toHaveLength(32);
   const second = await browser();

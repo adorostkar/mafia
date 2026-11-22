@@ -14,16 +14,21 @@ import {
 } from "./auth.js";
 import { codeSchema, commandSchema, nameSchema } from "./validation.js";
 import { GameError, GameStore } from "./game.js";
+import { emailSchema, type Mailer } from "./email.js";
+import { normalizeDigits } from "../shared/input.js";
 
 interface AppOptions {
   secureCookies?: boolean;
   publicOrigin?: string;
   trustProxy?: string[];
+  email?: Mailer;
 }
 export function createApp(db: DatabaseSync, options: AppOptions = {}) {
+  if (options.email && !options.publicOrigin)
+    throw new Error("Email recovery requires PUBLIC_ORIGIN.");
   const app = express();
   const store = new GameStore(db);
-  const auth = new AuthStore(db);
+  const auth = new AuthStore(db, options.email);
   const streams = new Map<
     string,
     Set<{ response: Response; session: AuthSession }>
@@ -134,7 +139,8 @@ export function createApp(db: DatabaseSync, options: AppOptions = {}) {
     limit: 12,
     keyGenerator: (req) =>
       hashToken(
-        usernameSchema.safeParse(req.body?.username).data ?? "invalid-username",
+        loginSchema.shape.username.safeParse(req.body?.username).data ??
+          "invalid-username",
       ),
     message: { error: "rateLimit" },
   });
@@ -154,14 +160,105 @@ export function createApp(db: DatabaseSync, options: AppOptions = {}) {
       confirmPassword: z.string(),
     })
     .refine((value) => value.password === value.confirmPassword);
-  app.post("/api/auth/register", accountNameLimit, async (req, res) => {
-    const { username, password } = newCredentials.parse(req.body);
-    const result = await auth.register(session(res), username, password);
+  const emailLimit = rateLimit({
+    windowMs: 15 * 60_000,
+    limit: 5,
+    skip: () => !options.email,
+    keyGenerator: (req, res) =>
+      hashToken(
+        req.route.path === "/api/auth/resend-verification"
+          ? (auth.identity(session(res)).pendingEmail ?? "invalid-email")
+          : (emailSchema.safeParse(req.body?.email).data ?? "invalid-email"),
+      ),
+    message: { error: "rateLimit" },
+  });
+  app.post(
+    "/api/auth/register",
+    accountNameLimit,
+    emailLimit,
+    async (req, res) => {
+      const { username, password } = newCredentials.parse(req.body);
+      if (options.email) {
+        const { email, language } = z
+          .object({
+            email: emailSchema,
+            language: z.string().max(35).default("en"),
+          })
+          .parse(req.body);
+        await auth.beginEmailRegistration(
+          session(res),
+          username,
+          password,
+          email,
+          language,
+        );
+        res.status(202).json({ identity: auth.identity(session(res)) });
+        return;
+      }
+      const result = await auth.register(session(res), username, password);
+      notifyAll();
+      res.status(201).json({
+        identity: setSession(res, result),
+        recoveryCode: result.recoveryCode,
+      });
+    },
+  );
+  app.post("/api/auth/verify-email", (req, res) => {
+    if (!options.email) throw new GameError("notFound", 404);
+    const { code } = z
+      .object({
+        code: z
+          .string()
+          .trim()
+          .transform(normalizeDigits)
+          .pipe(z.string().regex(/^\d{6}$/)),
+      })
+      .parse(req.body);
+    const result = auth.verifyEmail(session(res), code);
     notifyAll();
-    res.status(201).json({
-      identity: setSession(res, result),
-      recoveryCode: result.recoveryCode,
-    });
+    res.status(201).json({ identity: setSession(res, result) });
+  });
+  app.post("/api/auth/resend-verification", emailLimit, async (req, res) => {
+    const { language } = z
+      .object({ language: z.string().max(35).default("en") })
+      .parse(req.body);
+    await auth.resendVerification(session(res), language);
+    res.status(202).json({ identity: auth.identity(session(res)) });
+  });
+  app.post("/api/auth/request-reset", emailLimit, (req, res) => {
+    if (!options.email || !options.publicOrigin)
+      throw new GameError("notFound", 404);
+    const { email, language } = z
+      .object({
+        email: emailSchema,
+        language: z.string().max(35).default("en"),
+      })
+      .parse(req.body);
+    // Provider latency and delivery errors must not disclose account existence.
+    res.status(202).json({ ok: true });
+    void auth
+      .requestEmailReset(email, language, options.publicOrigin)
+      .catch((error: unknown) => {
+        console.error("Could not send a password reset email", error);
+      });
+  });
+  app.post("/api/auth/reset-password", async (req, res) => {
+    if (!options.email) throw new GameError("notFound", 404);
+    const { token, password } = z
+      .object({
+        token: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
+        password: passwordSchema,
+        confirmPassword: z.string(),
+      })
+      .refine((value) => value.password === value.confirmPassword)
+      .parse(req.body);
+    const current = session(res);
+    await auth.resetPassword(token, password);
+    const identity = auth.isValid(current)
+      ? auth.identity(current)
+      : setSession(res, auth.guest());
+    notifyAll();
+    res.json({ identity });
   });
   app.post("/api/auth/login", accountNameLimit, async (req, res) => {
     const { username, password, adoptGuest } = loginSchema.parse(req.body);

@@ -107,6 +107,7 @@ export type Command =
 export interface PlayerView {
   id: string;
   name: string;
+  isGuest: boolean;
   alive: boolean;
   role: Role | null;
   originalRole: Role | null;
@@ -279,6 +280,9 @@ export interface Identity {
   id: string;
   username: string | null;
   isGuest: boolean;
+  emailEnabled: boolean;
+  email: string | null;
+  pendingEmail: string | null;
 }
 export interface SessionView {
   id: string;
@@ -313,5 +317,9 @@ export const errorCodes = [
   "missingChoices",
   "csrf",
   "legacyRules",
+  "emailUnavailable",
+  "emailVerification",
+  "emailInUse",
+  "resetLink",
 ] as const;
 export type ErrorCode = (typeof errorCodes)[number];

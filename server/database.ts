@@ -18,7 +18,7 @@ export function transaction<T>(db: DatabaseSync, work: () => T): T {
 export function openDatabase(path: string) {
   const db = new DatabaseSync(path);
   const version = Number(db.prepare("PRAGMA user_version").get()!.user_version);
-  if (version > 2) {
+  if (version > 3) {
     db.close();
     throw new Error(
       "The database was created by a newer version of Mafia Table.",
@@ -220,6 +220,32 @@ export function openDatabase(path: string) {
             "UPDATE sessions SET id = ?, created_at = ?, last_seen_at = ? WHERE token_hash = ?",
           ).run(randomUUID(), Date.now(), Date.now(), row.token_hash);
         }
+      });
+    }
+    if (version < 3) {
+      transaction(db, () => {
+        db.exec(`
+          ALTER TABLE accounts ADD COLUMN email TEXT;
+          CREATE UNIQUE INDEX accounts_email ON accounts(email) WHERE email IS NOT NULL;
+          CREATE TABLE email_registrations (
+            profile_id TEXT PRIMARY KEY REFERENCES profiles(id) ON DELETE CASCADE,
+            username TEXT NOT NULL,
+            email TEXT NOT NULL,
+            password_hash TEXT NOT NULL,
+            code_hash TEXT NOT NULL,
+            expires_at INTEGER NOT NULL,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            last_sent_at INTEGER NOT NULL
+          );
+          CREATE TABLE email_reset_tokens (
+            token_hash TEXT PRIMARY KEY,
+            profile_id TEXT NOT NULL REFERENCES accounts(profile_id) ON DELETE CASCADE,
+            credentials_hash TEXT NOT NULL,
+            expires_at INTEGER NOT NULL
+          );
+          CREATE INDEX email_reset_profile ON email_reset_tokens(profile_id);
+          PRAGMA user_version = 3;
+        `);
       });
     }
     return db;

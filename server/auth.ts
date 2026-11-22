@@ -1,6 +1,7 @@
 import {
   createHash,
   randomBytes,
+  randomInt,
   randomUUID,
   scrypt,
   timingSafeEqual,
@@ -10,6 +11,7 @@ import { z } from "zod";
 import type { Identity, SessionView } from "../shared/game.js";
 import { transaction } from "./database.js";
 import { GameError } from "./errors.js";
+import { accountEmail, emailSchema, type Mailer } from "./email.js";
 
 const passwordCost = { N: 131072, r: 8, p: 1, maxmem: 192 * 1024 * 1024 };
 let hashing = 0;
@@ -59,7 +61,7 @@ export const usernameSchema = z
   .regex(/^[a-z0-9_]{3,30}$/);
 export const passwordSchema = z.string().min(15).max(128);
 export const loginSchema = z.object({
-  username: usernameSchema,
+  username: z.union([usernameSchema, emailSchema]),
   password: z.string().min(1).max(128),
   adoptGuest: z.boolean(),
 });
@@ -78,13 +80,17 @@ const accountSchema = z.object({
   username: z.string(),
   password_hash: z.string(),
   recovery_hash: z.string(),
+  email: z.string().nullable(),
   created_at: z.number(),
 });
 const sessionLifetime = 30 * 24 * 60 * 60_000;
 const guestLifetime = 365 * 24 * 60 * 60_000;
 
 export class AuthStore {
-  constructor(private db: DatabaseSync) {}
+  constructor(
+    private db: DatabaseSync,
+    private email?: Mailer,
+  ) {}
 
   session(token: string | undefined): AuthSession | null {
     if (!token || !/^[a-f0-9]{64}$/.test(token)) return null;
@@ -121,10 +127,19 @@ export class AuthStore {
     if (!this.isValid(session)) throw new GameError("authentication", 401);
   }
   identity(session: AuthSession): Identity {
+    const account = this.db
+      .prepare("SELECT email FROM accounts WHERE profile_id=?")
+      .get(session.profileId);
+    const pending = this.db
+      .prepare("SELECT email FROM email_registrations WHERE profile_id=?")
+      .get(session.profileId);
     return {
       id: session.profileId,
       username: session.username,
       isGuest: !session.username,
+      emailEnabled: !!this.email,
+      email: account?.email ? String(account.email) : null,
+      pendingEmail: pending ? String(pending.email) : null,
     };
   }
   private issue(profileId: string) {
@@ -174,7 +189,9 @@ export class AuthStore {
       )
         throw new GameError("usernameTaken", 409);
       this.db
-        .prepare("INSERT INTO accounts VALUES (?,?,?,?,?)")
+        .prepare(
+          "INSERT INTO accounts(profile_id,username,password_hash,recovery_hash,created_at) VALUES (?,?,?,?,?)",
+        )
         .run(
           session.profileId,
           username,
@@ -186,6 +203,226 @@ export class AuthStore {
         .prepare("DELETE FROM sessions WHERE profile_id=?")
         .run(session.profileId);
       return { ...this.issue(session.profileId), recoveryCode };
+    });
+  }
+  async beginEmailRegistration(
+    session: AuthSession,
+    username: string,
+    password: string,
+    email: string,
+    language: string,
+  ) {
+    if (!this.email) throw new GameError("invalid");
+    this.requireSession(session);
+    if (session.username) throw new GameError("accountExists");
+    const passwordHash = await hashPassword(password);
+    const code = randomInt(1_000_000).toString().padStart(6, "0");
+    transaction(this.db, () => {
+      this.requireSession(session);
+      if (
+        this.db
+          .prepare("SELECT 1 FROM accounts WHERE profile_id=?")
+          .get(session.profileId)
+      )
+        throw new GameError("accountExists");
+      if (
+        this.db.prepare("SELECT 1 FROM accounts WHERE username=?").get(username)
+      )
+        throw new GameError("usernameTaken", 409);
+      const pending = this.db
+        .prepare(
+          "SELECT last_sent_at FROM email_registrations WHERE profile_id=?",
+        )
+        .get(session.profileId);
+      if (pending && Number(pending.last_sent_at) > Date.now() - 60_000)
+        throw new GameError("rateLimit", 429);
+      this.db
+        .prepare(
+          `INSERT INTO email_registrations(profile_id,username,email,password_hash,code_hash,expires_at,last_sent_at)
+        VALUES (?,?,?,?,?,?,?) ON CONFLICT(profile_id) DO UPDATE SET
+        username=excluded.username,email=excluded.email,password_hash=excluded.password_hash,
+        code_hash=excluded.code_hash,expires_at=excluded.expires_at,attempts=0,last_sent_at=excluded.last_sent_at`,
+        )
+        .run(
+          session.profileId,
+          username,
+          email,
+          passwordHash,
+          hashToken(code),
+          Date.now() + 15 * 60_000,
+          Date.now(),
+        );
+    });
+    await this.deliverVerification(email, code, language);
+  }
+  private async deliverVerification(
+    email: string,
+    code: string,
+    language: string,
+  ) {
+    if (!this.email) throw new GameError("notFound", 404);
+    try {
+      await this.email.send(
+        accountEmail("verification", email, code, language),
+      );
+    } catch (error) {
+      console.error("Could not send a verification email", error);
+      throw new GameError("emailUnavailable", 503);
+    }
+  }
+  async resendVerification(session: AuthSession, language: string) {
+    if (!this.email) throw new GameError("notFound", 404);
+    this.requireSession(session);
+    const row = this.db
+      .prepare(
+        "SELECT email,last_sent_at FROM email_registrations WHERE profile_id=?",
+      )
+      .get(session.profileId);
+    if (!row) throw new GameError("emailVerification");
+    if (Number(row.last_sent_at) > Date.now() - 60_000)
+      throw new GameError("rateLimit", 429);
+    const code = randomInt(1_000_000).toString().padStart(6, "0");
+    this.db
+      .prepare(
+        "UPDATE email_registrations SET code_hash=?,expires_at=?,attempts=0,last_sent_at=? WHERE profile_id=?",
+      )
+      .run(
+        hashToken(code),
+        Date.now() + 15 * 60_000,
+        Date.now(),
+        session.profileId,
+      );
+    await this.deliverVerification(String(row.email), code, language);
+  }
+  verifyEmail(session: AuthSession, code: string) {
+    this.requireSession(session);
+    const row = this.db
+      .prepare("SELECT * FROM email_registrations WHERE profile_id=?")
+      .get(session.profileId);
+    if (
+      !row ||
+      Number(row.expires_at) <= Date.now() ||
+      Number(row.attempts) >= 5
+    )
+      throw new GameError("emailVerification");
+    if (
+      !timingSafeEqual(
+        Buffer.from(String(row.code_hash), "hex"),
+        Buffer.from(hashToken(code), "hex"),
+      )
+    ) {
+      this.db
+        .prepare(
+          "UPDATE email_registrations SET attempts=attempts+1 WHERE profile_id=?",
+        )
+        .run(session.profileId);
+      throw new GameError("emailVerification");
+    }
+    return transaction(this.db, () => {
+      if (
+        this.db
+          .prepare("SELECT 1 FROM accounts WHERE profile_id=?")
+          .get(session.profileId)
+      )
+        throw new GameError("accountExists");
+      if (
+        this.db
+          .prepare("SELECT 1 FROM accounts WHERE username=?")
+          .get(row.username)
+      )
+        throw new GameError("usernameTaken", 409);
+      if (
+        this.db.prepare("SELECT 1 FROM accounts WHERE email=?").get(row.email)
+      )
+        throw new GameError("emailInUse", 409);
+      this.db
+        .prepare(
+          "INSERT INTO accounts(profile_id,username,password_hash,recovery_hash,created_at,email) VALUES (?,?,?,?,?,?)",
+        )
+        .run(
+          session.profileId,
+          row.username,
+          row.password_hash,
+          hashToken(randomBytes(24).toString("base64url")),
+          Date.now(),
+          row.email,
+        );
+      this.db
+        .prepare("DELETE FROM email_registrations WHERE profile_id=?")
+        .run(session.profileId);
+      this.db
+        .prepare("DELETE FROM sessions WHERE profile_id=?")
+        .run(session.profileId);
+      return this.issue(session.profileId);
+    });
+  }
+  async requestEmailReset(email: string, language: string, origin: string) {
+    if (!this.email) throw new GameError("notFound", 404);
+    const row = this.db
+      .prepare("SELECT * FROM accounts WHERE email=?")
+      .get(email);
+    if (!row) return;
+    const account = accountSchema.parse(row);
+    const token = randomBytes(32).toString("base64url");
+    this.db
+      .prepare(
+        "INSERT INTO email_reset_tokens(token_hash,profile_id,credentials_hash,expires_at) VALUES (?,?,?,?)",
+      )
+      .run(
+        hashToken(token),
+        account.profile_id,
+        hashToken(`${account.password_hash}:${account.recovery_hash}`),
+        Date.now() + 30 * 60_000,
+      );
+    const url = new URL("/?view=reset", origin);
+    url.hash = new URLSearchParams({ token }).toString();
+    await this.email.send(accountEmail("reset", email, url.href, language));
+  }
+  async resetPassword(token: string, password: string) {
+    const tokenHash = hashToken(token);
+    const row = this.db
+      .prepare(
+        `SELECT a.*, t.credentials_hash, t.expires_at FROM email_reset_tokens t
+      JOIN accounts a ON a.profile_id=t.profile_id WHERE t.token_hash=?`,
+      )
+      .get(tokenHash);
+    if (!row || Number(row.expires_at) <= Date.now())
+      throw new GameError("resetLink");
+    const account = accountSchema.parse(row);
+    if (
+      row.credentials_hash !==
+      hashToken(`${account.password_hash}:${account.recovery_hash}`)
+    )
+      throw new GameError("resetLink");
+    const passwordHash = await hashPassword(password);
+    transaction(this.db, () => {
+      if (
+        !this.db
+          .prepare(
+            "SELECT 1 FROM email_reset_tokens WHERE token_hash=? AND expires_at>?",
+          )
+          .get(tokenHash, Date.now())
+      )
+        throw new GameError("resetLink");
+      const changed = this.db
+        .prepare(
+          `UPDATE accounts SET password_hash=?, recovery_hash=?
+        WHERE profile_id=? AND password_hash=? AND recovery_hash=?`,
+        )
+        .run(
+          passwordHash,
+          hashToken(randomBytes(24).toString("base64url")),
+          account.profile_id,
+          account.password_hash,
+          account.recovery_hash,
+        );
+      if (!changed.changes) throw new GameError("resetLink");
+      this.db
+        .prepare("DELETE FROM email_reset_tokens WHERE profile_id=?")
+        .run(account.profile_id);
+      this.db
+        .prepare("DELETE FROM sessions WHERE profile_id=?")
+        .run(account.profile_id);
     });
   }
   private adoptGuest(source: string, destination: string) {
@@ -233,8 +470,8 @@ export class AuthStore {
     adoptGuest: boolean,
   ) {
     const row = this.db
-      .prepare("SELECT * FROM accounts WHERE username=?")
-      .get(username);
+      .prepare("SELECT * FROM accounts WHERE username=? OR email=?")
+      .get(username, username);
     const account = row ? accountSchema.parse(row) : null;
     if (!(await verifyPassword(password, account?.password_hash)) || !account)
       throw new GameError("authentication", 401);
@@ -414,5 +651,11 @@ export class AuthStore {
   }
   pruneExpiredSessions() {
     this.db.prepare("DELETE FROM sessions WHERE expires_at<=?").run(Date.now());
+    this.db
+      .prepare("DELETE FROM email_registrations WHERE expires_at<=?")
+      .run(Date.now());
+    this.db
+      .prepare("DELETE FROM email_reset_tokens WHERE expires_at<=?")
+      .run(Date.now());
   }
 }

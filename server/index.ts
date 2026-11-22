@@ -4,6 +4,7 @@ import express from "express";
 import { z } from "zod";
 import { openDatabase } from "./database.js";
 import { createApp } from "./app.js";
+import { createResendMailer } from "./email.js";
 
 process.umask(0o077);
 const port = z.coerce
@@ -37,6 +38,7 @@ const db = openDatabase(path);
 const { app, closeStreams, maintenance } = createApp(db, {
   secureCookies: production,
   publicOrigin,
+  email: createResendMailer(process.env),
   trustProxy: process.env.TRUST_PROXY?.split(",")
     .map((address) => address.trim())
     .filter(Boolean),
