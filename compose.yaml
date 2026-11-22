@@ -6,6 +6,8 @@ services:
     environment:
       PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:?Set PUBLIC_ORIGIN to your HTTPS origin}
       TRUST_PROXY: ${TRUST_PROXY:-}
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      EMAIL_FROM: ${EMAIL_FROM:-}
     volumes:
       - mafia-data:/app/data
     read_only: true

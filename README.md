@@ -5,8 +5,9 @@ Game Master (GM). Players use their own phones for secret roles, night choices,
 and votes. The app runs the rules and saves the match.
 
 The design uses a dark card-table theme, red/green/gold faction colors, and
-self-hosted fonts. All screens, rules, errors, and announcements are available in
-English and Finnish. More languages can be added with a JSON file.
+self-hosted fonts. All screens, rules, errors, emails, and announcements are
+available in English, Finnish, and Persian (Farsi). Persian uses a right-to-left
+layout and the Vazirmatn font. More languages can be added with a JSON file.
 
 ## Run locally
 
@@ -54,6 +55,15 @@ Each person needs a separate device or browser profile. Tabs in the same browser
 share one identity. **Your tables** lets you return to active games. Game and
 report URLs can also be bookmarked.
 
+Many games can run at the same time. Each has its own join code, players, and
+private state. One profile can host up to five active tables.
+
+Display names must be unique within a table, ignoring letter case. A registered
+player cannot take a guest's occupied name or seat; they must choose another
+display name. **Guest** and **Registered player** labels identify the account
+type without revealing usernames or email addresses. A label is not proof of
+someone's real-world identity.
+
 This is an in-person companion app. It does not include voice or video chat.
 For remote play, use a separate call and keep private role screens out of screen
 sharing.
@@ -64,6 +74,18 @@ Mafia has many local versions. This app has one explicit house ruleset,
 **`mafia-table-1`**, inspired by social Mafia and Godfather-style role games.
 It is not an official Iranian, Hungarian, or Finnish tournament ruleset.
 The in-app rulebook describes the rules that this version actually runs.
+
+### Character library
+
+Open **How to play → Character library** to browse all 13 roles in their faction
+groups. Each has its own original illustration. Tap or use the keyboard to flip
+from artwork and name to the role description.
+
+During play, the private role card has a neutral hidden face and **no character
+artwork on either side**. Revealing it shows the role, faction, description, and
+remaining abilities together. Hide it with the same control; it also hides when
+the page loses focus or goes into the background. Only the active card face is
+available to a screen reader. Reduced-motion settings disable the animation.
 
 ### Roles
 
@@ -151,18 +173,40 @@ not passwords. Its settings are `N=131072, r=8, p=1`, with at most two password
 hash operations running at once. Allow enough server memory for this; 1 GB is a
 reasonable starting point for a small host.
 
-Account creation shows a random **one-time recovery code**. Save it in a password
-manager or download it from the dialog. It is hidden until revealed. There is no
-email reset service.
+The host chooses one of two recovery modes:
 
-- Recovery sets a new password, revokes old sessions, and gives a new recovery
-  code. The old code no longer works. You then sign in.
+| Host settings     | New accounts                           | Recovery                                                      |
+| ----------------- | -------------------------------------- | ------------------------------------------------------------- |
+| No email service  | Username and password                  | Save the one-time recovery code shown at signup               |
+| Resend configured | Username, password, and verified email | Email reset link; an optional backup code can also be created |
+
+**Guests never need an email or an account.** With email enabled, new registered
+accounts need a verified email so they have a reliable recovery path. A six-digit
+code confirms ownership before the account is created. Codes expire after
+15 minutes, allow five attempts, and can be resent after one minute.
+
+Email reset links expire after 30 minutes and work once. Opening a link does not
+change the password. Choose and save a new password, then sign in. Resetting
+revokes all old sessions, reset links, and recovery codes. The secret is in the
+URL fragment, not the query string, and is removed from the address bar after
+the app reads it. Reset requests do not reveal whether an email has an account.
+
+An email account can create an optional backup recovery code in **Your profile**.
+Save it in a password manager or download it from the dialog. It is hidden until
+revealed and is only shown when created. Existing code-only accounts keep working
+if email is enabled later; they are not forced through registration again.
+
+- Code recovery sets a new password, revokes old sessions, and gives a new
+  recovery code. The old code and outstanding email reset links no longer work.
 - Changing a password or replacing a recovery code signs other devices out.
 - **Your profile** shows signed-in sessions and lets you revoke another device.
 - Account cookies expire after 30 days. Guest cookies expire after one year.
 - Losing a guest cookie without first creating an account loses access to that
-  guest history. Without a password or recovery code, an account cannot be
-  recovered through the app.
+  guest history. Without a password, a recovery code, or access to a verified
+  email with email delivery enabled, an account cannot be recovered through the app.
+
+Email addresses are private. They are used only for verification and recovery,
+and Resend processes these messages. No marketing emails are sent.
 
 You can download your profile and game data as JSON. You can also delete your
 profile after leaving active games or cancelling tables you host. Account
@@ -233,14 +277,15 @@ and `AbortSignal` features.
 
 Automated accessibility checks are included. They are not a certification.
 Before a public launch, also try VoiceOver on iOS, TalkBack on Android, and NVDA
-on desktop, with both languages and real headphone use.
+on desktop, with all three languages and real headphone use.
 
 ## Add a language
 
 1. Copy `src/locales/en.json` to a new file, such as `src/locales/hu.json`.
 2. Set `meta.code` to the language code, `meta.nativeName` to its name in that
    language, and `meta.direction` to `ltr` or `rtl`.
-3. Translate all text. Keep keys and `{{variables}}` unchanged.
+3. Translate all text, including the `mail` section. Keep keys and
+   `{{variables}}` unchanged.
 4. Add the plural forms required by that language. English uses `_one` and
    `_other`; some languages need `_zero`, `_two`, `_few`, or `_many` too.
 5. Set `meta.enabled` to `true`. Run `npm test` and `npm run build`.
@@ -291,42 +336,48 @@ The game module owns the rule and privacy decisions. The client does not decide
 whether a target is legal or whether a faction has won. Commands either commit
 in one transaction or leave the match unchanged.
 
-| File                 | Responsibility                                    |
-| -------------------- | ------------------------------------------------- |
-| `shared/game.ts`     | Roles and shared request/view types               |
-| `server/model.ts`    | Stored game and player state                      |
-| `server/rules.ts`    | Actions, ballots, abilities, and victory checks   |
-| `server/game.ts`     | Save/load, private views, history, and statistics |
-| `server/auth.ts`     | Accounts, session tokens, recovery, and deletion  |
-| `server/app.ts`      | HTTP routes, request checks, limits, and SSE      |
-| `server/database.ts` | Schema and versioned migrations                   |
-| `server/backup.ts`   | Online, checked database backups                  |
-| `src/useGame.ts`     | Live state, reconnect, and safe command retries   |
-| `src/GameTable.tsx`  | Lobby and GM/player game flows                    |
-| `src/Account.tsx`    | Sign-in, recovery, sessions, and privacy controls |
-| `src/Reports.tsx`    | Personal statistics and match reports             |
-| `src/locales/*.json` | UI, rules, prompts, and announcements             |
+| File                       | Responsibility                                    |
+| -------------------------- | ------------------------------------------------- |
+| `shared/game.ts`           | Roles and shared request/view types               |
+| `server/model.ts`          | Stored game and player state                      |
+| `server/rules.ts`          | Actions, ballots, abilities, and victory checks   |
+| `server/game.ts`           | Save/load, private views, history, and statistics |
+| `server/auth.ts`           | Accounts, session tokens, recovery, and deletion  |
+| `server/email.ts`          | Optional Resend delivery and translated emails    |
+| `server/app.ts`            | HTTP routes, request checks, limits, and SSE      |
+| `server/database.ts`       | Schema and versioned migrations                   |
+| `server/backup.ts`         | Online, checked database backups                  |
+| `src/useGame.ts`           | Live state, reconnect, and safe command retries   |
+| `src/GameTable.tsx`        | Lobby and GM/player game flows                    |
+| `src/Account.tsx`          | Sign-in, recovery, sessions, and privacy controls |
+| `src/CharacterLibrary.tsx` | Illustrated learning cards                        |
+| `src/FlipCard.tsx`         | Accessible card faces and reveal control          |
+| `src/Reports.tsx`          | Personal statistics and match reports             |
+| `src/locales/*.json`       | UI, rules, prompts, and announcements             |
 
 ### Data model
 
-| Table              | Stores                                                                        |
-| ------------------ | ----------------------------------------------------------------------------- |
-| `profiles`         | Stable player identities                                                      |
-| `accounts`         | Unique usernames and password/recovery hashes                                 |
-| `sessions`         | Hashed random tokens, profile links, and expiry/usage times                   |
-| `games`            | Join codes, GM links, phase, day, rules version, timer, winner, and state     |
-| `players`          | Membership, name, original/current role, life state, ability uses, and result |
-| `actions`          | Actor, target list, night/day, optional role guess or ammunition, and outcome |
-| `votes`            | Ballot, voter, target or abstention, day, and round                           |
-| `private_notices`  | Player-only investigation, prediction, recruitment, and gun results           |
-| `public_events`    | The match timeline                                                            |
-| `events`           | The command history                                                           |
-| `command_receipts` | Request IDs and payload hashes that prevent duplicate changes                 |
+| Table                 | Stores                                                                        |
+| --------------------- | ----------------------------------------------------------------------------- |
+| `profiles`            | Stable player identities                                                      |
+| `accounts`            | Unique usernames, optional verified emails, and password/recovery hashes      |
+| `email_registrations` | Pending guest signups, hashed verification codes, expiry, and attempt limits  |
+| `email_reset_tokens`  | Hashed single-use reset tokens, credential bindings, and expiry               |
+| `sessions`            | Hashed random tokens, profile links, and expiry/usage times                   |
+| `games`               | Join codes, GM links, phase, day, rules version, timer, winner, and state     |
+| `players`             | Membership, name, original/current role, life state, ability uses, and result |
+| `actions`             | Actor, target list, night/day, optional role guess or ammunition, and outcome |
+| `votes`               | Ballot, voter, target or abstention, day, and round                           |
+| `private_notices`     | Player-only investigation, prediction, recruitment, and gun results           |
+| `public_events`       | The match timeline                                                            |
+| `events`              | The command history                                                           |
+| `command_receipts`    | Request IDs and payload hashes that prevent duplicate changes                 |
 
 Foreign keys, unique seat/action/vote constraints, and transactions protect
 stored state. Statistics are derived from records instead of separate counters.
 Game records are kept until the host removes them; the app does not silently
-expire match history. Expired sessions are pruned on startup and hourly.
+expire match history. Expired sessions, pending registrations, and reset tokens
+are pruned on startup and hourly.
 
 ### HTTP interface
 
@@ -339,6 +390,8 @@ cookies also require HTTPS. Session tokens are stored only as hashes.
 | GET        | `/healthz`                                            | Server/database readiness               |
 | GET        | `/api/me`                                             | Current identity                        |
 | POST       | `/api/auth/register`, `/login`, `/logout`, `/recover` | Account lifecycle                       |
+| POST       | `/api/auth/verify-email`, `/resend-verification`      | Verify a pending email signup           |
+| POST       | `/api/auth/request-reset`, `/reset-password`          | Private email recovery                  |
 | POST       | `/api/account/password`, `/recovery`, `/delete`       | Protected account changes               |
 | GET        | `/api/account/sessions`, `/export`                    | Sessions and data download              |
 | POST       | `/api/account/sessions/revoke`                        | Revoke another device                   |
@@ -461,6 +514,43 @@ The IP snippet trusts client-IP headers only from Cloudflare's published ranges.
 Keep it in sync with the two source URLs in the file. nginx replaces incoming
 forwarded headers before passing requests to the app.
 
+### Optional Resend setup
+
+Keep the key **on the server, not in chat, Git, browser code, or a `VITE_` variable**.
+For the deployment at `mafia.dorostkar.net`, the file is **`/opt/mafia/.env`**.
+Edit that file in your SSH session, preserving its other settings:
+
+```dotenv
+RESEND_API_KEY=replace-with-your-private-resend-key
+EMAIL_FROM="Mafia Table <accounts@mafia.dorostkar.net>"
+PUBLIC_ORIGIN=https://mafia.dorostkar.net
+```
+
+The sender above is an example. First verify `mafia.dorostkar.net` in
+[Resend Domains](https://resend.com/domains), using the DNS records Resend gives
+you, or use a sender on another domain you have already verified. Keep existing
+website DNS records. Create an **email-sending-only key** restricted to that
+sending domain in [Resend API keys](https://resend.com/api-keys).
+Disable open and click tracking for this sending domain so private recovery
+links are not rewritten for tracking.
+
+Restrict the `.env` file to its owner with mode `600`. Do not print it, paste it
+into commands saved in shell history, or share unredacted `docker compose config`
+output. `compose.yaml` passes the two email settings only to the server.
+
+Set **both** `RESEND_API_KEY` and `EMAIL_FROM` to enable email mode, or leave both
+empty for code mode. Incomplete configuration stops startup with a clear error.
+`PUBLIC_ORIGIN` is required in email mode, including local tests.
+
+Settings take effect when the app is recreated during an approved deployment.
+Adding the key alone does not update the running container. After deployment,
+verify signup and password recovery with an inbox you own; local tests use a fake
+mailer and cannot prove real delivery or domain configuration.
+
+Do not silently disable email after people create email accounts. Such users
+need their password or a saved backup code while email is unavailable. Restore
+email service before depending on email recovery again.
+
 ### Backup, restore, and upgrades
 
 Create a consistent backup without stopping the app:
@@ -520,3 +610,5 @@ own rulebook takes precedence when a game variant differs.
 - [OWASP: Password storage](https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html)
 - [OWASP: Account recovery](https://cheatsheetseries.owasp.org/cheatsheets/Forgot_Password_Cheat_Sheet.html)
 - [i18next: Plural forms](https://www.i18next.com/translation-function/plurals)
+- [Resend: Verified domains](https://resend.com/docs/dashboard/domains/introduction)
+- [Resend: API keys](https://resend.com/docs/dashboard/api-keys/introduction)

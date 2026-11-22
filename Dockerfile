@@ -13,6 +13,7 @@ COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/server ./server
 COPY --from=build /app/shared ./shared
+COPY --from=build /app/src/locales ./src/locales
 RUN mkdir -p /app/data && chown node:node /app/data
 USER node
 EXPOSE 3001
