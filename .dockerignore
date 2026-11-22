@@ -10,3 +10,5 @@ coverage
 *.sqlite
 *.sqlite-wal
 *.sqlite-shm
+**/*.test.ts
+**/*.test.tsx
