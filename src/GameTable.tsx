@@ -11,9 +11,11 @@ import {
   type RoleCounts,
   type VotingMode,
 } from "../shared/game";
+import { isolate } from "../shared/input";
 import type { Translation } from "./i18n";
 import { Icon } from "./Art";
 import { FlipCard } from "./FlipCard";
+import { InviteStrip } from "./Invite";
 import {
   actionText,
   eventText,
@@ -64,7 +66,7 @@ function RoleSetup({ game, t, disabled, send }: Controls) {
             players: game.players.length,
           })}
         >
-          {total}/{game.players.length}
+          {t.number(total)}/{t.number(game.players.length)}
         </span>
       </div>
       <p className="muted" id="setup-help">
@@ -234,13 +236,14 @@ function Players({ game, t, disabled, send }: Controls) {
                 <ConfirmAction
                   t={t}
                   disabled={disabled}
-                  label={t.message("playerAction", {
+                  label={t.text.removePlayer}
+                  ariaLabel={t.message("playerAction", {
                     action: t.text.removePlayer,
-                    name: player.name,
+                    name: isolate(player.name),
                   })}
                   description={t.message("playerAction", {
                     action: t.text.removePlayer,
-                    name: player.name,
+                    name: isolate(player.name),
                   })}
                   onConfirm={() =>
                     send({ type: "remove", playerId: player.id })
@@ -421,6 +424,12 @@ function NightTurn({ game, t, disabled, send }: Controls) {
     game.eligibleTargetIds.includes(player.id),
   );
   const introduction = game.day === 0 && game.window === "mafia";
+  const yourTurn = game.canAct || !!game.abilities?.needsAlignment;
+  const card = useRef<HTMLElement>(null);
+  useEffect(() => {
+    // On a phone the card can sit below the edge of the screen when the turn starts.
+    if (yourTurn) card.current?.scrollIntoView?.({ block: "nearest" });
+  }, [yourTurn]);
   const submit = (targetIds: string[]) =>
     game.window &&
     send({
@@ -433,18 +442,15 @@ function NightTurn({ game, t, disabled, send }: Controls) {
     });
   return (
     <section
-      className={`panel night-card ${game.canAct || game.abilities?.needsAlignment ? "your-turn" : ""}`}
+      className={`panel night-card ${yourTurn ? "your-turn" : ""}`}
       aria-labelledby="night-turn-title"
+      ref={card}
     >
       <div className="section-heading">
         <p className="eyebrow">{t.text.private}</p>
         <Icon name="moon" />
       </div>
-      <h2 id="night-turn-title">
-        {game.canAct || game.abilities?.needsAlignment
-          ? t.text.yourTurn
-          : t.text.night}
-      </h2>
+      <h2 id="night-turn-title">{yourTurn ? t.text.yourTurn : t.text.night}</h2>
       <p>
         {!self?.alive
           ? t.text.deadText
@@ -1014,21 +1020,26 @@ export function GameTable({
   showReports,
   leaveTable,
 }: Controls & { showReports: () => void; leaveTable: () => void }) {
-  const [copyStatus, setCopyStatus] = useState<"copied" | "copyError" | null>(
-    null,
-  );
   const controls = { game, t, disabled, send };
   const title =
     game.day === 0 && game.phase === "night"
       ? t.text.introNight
-      : ["lobby", "finished"].includes(game.phase)
-        ? game.phase === "lobby"
-          ? t.text.lobby
-          : t.text.result
-        : t.message("phaseTitle", {
-            phase: t.phase[game.phase],
-            day: game.day,
-          });
+      : game.phase === "lobby"
+        ? t.text.lobby
+        : game.phase === "finished"
+          ? t.text.result
+          : game.phase === "day" || game.phase === "night"
+            ? t.message("phaseTitle", {
+                phase: t.phase[game.phase],
+                day: game.day,
+              })
+            : t.message("phaseOnDay", {
+                phase: t.phase[game.phase],
+                day: t.message("phaseTitle", {
+                  phase: t.phase.day,
+                  day: game.day,
+                }),
+              });
   const self = game.players.find((player) => player.id === game.selfId);
   const latest = game.events.at(-1);
   const currentRules = game.rulesVersion === RULES_VERSION;
@@ -1086,40 +1097,7 @@ export function GameTable({
                 : t.prompt[game.window]
               : t.text.nightText)}
       </div>
-      <section
-        className={`invite-strip ${game.phase !== "lobby" ? "compact" : ""}`}
-        aria-label={t.text.code}
-      >
-        <div>
-          <span className="small">
-            {game.phase === "lobby" ? t.text.invite : t.text.code}
-          </span>
-          <strong
-            className="join-code"
-            aria-label={`${t.text.code}: ${game.code.split("").join(" ")}`}
-          >
-            {game.code}
-          </strong>
-        </div>
-        <button
-          className="secondary"
-          onClick={async () => {
-            try {
-              await navigator.clipboard.writeText(game.code);
-              setCopyStatus("copied");
-            } catch (error) {
-              console.error("Clipboard unavailable", error);
-              setCopyStatus("copyError");
-            }
-          }}
-        >
-          <Icon name="copy" />
-          {t.text.copy}
-        </button>
-        <span className="small" role="status">
-          {copyStatus ? t.text[copyStatus] : ""}
-        </span>
-      </section>
+      {game.phase === "lobby" && <InviteStrip game={game} t={t} />}
       {game.winner && (
         <section className={`panel result-card ${game.winner}`}>
           <span className="star-mark" aria-hidden="true">
@@ -1169,13 +1147,6 @@ export function GameTable({
               )}
             </section>
           )}
-          {!game.isGm && game.phase !== "lobby" && (
-            <PrivateRole
-              key={`${game.code}:${game.selfId}:${self?.role}`}
-              game={game}
-              t={t}
-            />
-          )}
           {!game.isGm && currentRules && game.phase === "night" && (
             <NightTurn key={`${game.day}-${game.window}`} {...controls} />
           )}
@@ -1196,6 +1167,13 @@ export function GameTable({
             self?.alive &&
             game.abilities?.hasGun && <DayGun {...controls} />}
           {game.lastVote && <VoteSummary game={game} t={t} />}
+          {!game.isGm && game.phase !== "lobby" && (
+            <PrivateRole
+              key={`${game.code}:${game.selfId}:${self?.role}`}
+              game={game}
+              t={t}
+            />
+          )}
         </div>
         <div className="stack">
           <Players {...controls} />

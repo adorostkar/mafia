@@ -129,25 +129,27 @@ export function Reports({
                 <p>{t.text.noHistory}</p>
               </div>
             )}
-            <div className="pagination">
-              <button
-                className="secondary"
-                disabled={page === 0}
-                onClick={() => setPage(page - 1)}
-              >
-                {t.text.previous}
-              </button>
-              <span className="count">{t.number(page + 1)}</span>
-              <button
-                className="secondary"
-                disabled={data.nextPage === null}
-                onClick={() => {
-                  if (data.nextPage !== null) setPage(data.nextPage);
-                }}
-              >
-                {t.text.next}
-              </button>
-            </div>
+            {(page > 0 || data.nextPage !== null) && (
+              <div className="pagination">
+                <button
+                  className="secondary"
+                  disabled={page === 0}
+                  onClick={() => setPage(page - 1)}
+                >
+                  {t.text.previous}
+                </button>
+                <span className="count">{t.number(page + 1)}</span>
+                <button
+                  className="secondary"
+                  disabled={data.nextPage === null}
+                  onClick={() => {
+                    if (data.nextPage !== null) setPage(data.nextPage);
+                  }}
+                >
+                  {t.text.next}
+                </button>
+              </div>
+            )}
           </section>
           <p className="small muted">{t.text.reportNote}</p>
         </>
@@ -206,7 +208,7 @@ export function MatchReport({ code, t }: { code: string; t: Translation }) {
                     )}
                     {player.alignment && (
                       <p className="small">
-                        {t.message("alignment", {
+                        {t.message("chosenSide", {
                           faction: t.faction[player.alignment],
                         })}
                       </p>

@@ -29,6 +29,7 @@ void engine.init({
   lng: "en",
   fallbackLng: "en",
   initAsync: false,
+  showSupportNotice: false,
   interpolation: {
     escapeValue: false,
     alwaysFormat: true,

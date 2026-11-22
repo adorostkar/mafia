@@ -401,6 +401,8 @@ it("submits a ballot-scoped vote and keeps other players' choices private", () =
 });
 
 it("does not reveal private investigation results until requested", () => {
+  // Names carry direction marks, so they read correctly inside any language.
+  const result = "\u2068Matti\u2069 appears to belong to Mafia.";
   render(
     <GameTable
       {...controls}
@@ -417,18 +419,113 @@ it("does not reveal private investigation results until requested", () => {
       })}
     />,
   );
-  expect(
-    screen.queryByText("Matti appears to belong to Mafia."),
-  ).not.toBeInTheDocument();
+  expect(screen.queryByText(result)).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: t.text.revealMessages }));
-  expect(screen.getByText("Matti appears to belong to Mafia.")).toBeVisible();
+  expect(screen.getByText(result)).toBeVisible();
   fireEvent.click(screen.getByRole("button", { name: t.text.hideMessages }));
-  expect(
-    screen.queryByText("Matti appears to belong to Mafia."),
-  ).not.toBeInTheDocument();
+  expect(screen.queryByText(result)).not.toBeInTheDocument();
 });
 
-it.each(["en", "fi"] as const)(
+it("puts a player's turn above the role card and brings it into view", () => {
+  const scrollIntoView = vi.fn();
+  Element.prototype.scrollIntoView = scrollIntoView;
+  try {
+    const { rerender } = render(
+      <GameTable {...controls} game={game({ phase: "night" })} />,
+    );
+    expect(scrollIntoView).not.toHaveBeenCalled();
+    rerender(
+      <GameTable
+        {...controls}
+        game={game({ phase: "night", window: "doctor", canAct: true })}
+      />,
+    );
+    const turn = screen.getByRole("region", { name: t.text.yourTurn });
+    const role = screen.getByRole("region", { name: t.text.yourRole });
+    expect(
+      turn.compareDocumentPosition(role) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(scrollIntoView).toHaveBeenCalledOnce();
+    expect(scrollIntoView.mock.contexts[0]).toBe(turn);
+  } finally {
+    Reflect.deleteProperty(Element.prototype, "scrollIntoView");
+  }
+});
+
+it("offers invite tools in the lobby only, with the link and QR code for the Game Master", async () => {
+  const writeText = vi.fn(async () => {});
+  Object.defineProperty(navigator, "clipboard", {
+    value: { writeText },
+    configurable: true,
+  });
+  try {
+    const lobby = game({
+      isGm: true,
+      selfId: null,
+      phase: "lobby",
+      counts: suggestedCounts(6),
+    });
+    const { rerender } = render(<GameTable {...controls} game={lobby} />);
+    expect(screen.getByRole("img", { name: t.text.inviteQr })).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: t.text.copyLink }));
+    expect(await screen.findByText(t.text.linkCopied)).toBeVisible();
+    expect(writeText).toHaveBeenCalledWith(`${location.origin}/?game=ABC234`);
+
+    rerender(<GameTable {...controls} game={game({ phase: "lobby" })} />);
+    expect(screen.getByRole("button", { name: t.text.copy })).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: t.text.copyLink }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("img", { name: t.text.inviteQr }),
+    ).not.toBeInTheDocument();
+
+    rerender(<GameTable {...controls} game={{ ...lobby, phase: "day" }} />);
+    expect(
+      screen.queryByRole("button", { name: t.text.copy }),
+    ).not.toBeInTheDocument();
+  } finally {
+    Reflect.deleteProperty(navigator, "clipboard");
+  }
+});
+
+it("names a phase with its day and keeps the remove button short for long names", () => {
+  const { rerender } = render(
+    <GameTable
+      {...controls}
+      game={game({
+        phase: "voting",
+        ballot: {
+          id: "ballot",
+          round: 1,
+          candidates: ["doctor", "target"],
+          eligibleIds: ["doctor", "target"],
+          submittedIds: [],
+          myVote: null,
+        },
+      })}
+    />,
+  );
+  expect(
+    screen.getByRole("heading", { level: 1, name: "Voting · Day 1" }),
+  ).toBeVisible();
+  rerender(
+    <GameTable
+      {...controls}
+      game={game({
+        isGm: true,
+        selfId: null,
+        phase: "lobby",
+        counts: suggestedCounts(6),
+      })}
+    />,
+  );
+  expect(
+    screen.getByRole("button", { name: "Remove player: \u2068Matti\u2069" }),
+  ).toHaveTextContent(/^Remove player$/);
+});
+
+it.each(["en", "fi", "fa"] as const)(
   "has accessible GM and private night controls in %s",
   async (language) => {
     const state = game({

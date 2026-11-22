@@ -260,7 +260,7 @@
     display: block;
     margin-top: 5px;
     color: var(--muted);
-    font-size: 0.62rem;
+    font-size: 0.75rem;
     font-weight: 450;
     letter-spacing: 0.005em;
   }
@@ -270,12 +270,21 @@
     gap: 7px;
   }
   .nav-link {
-    background: none;
+    min-height: 48px;
+    padding: 12px;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     color: var(--muted);
-    padding-inline: 12px;
     font-size: 0.77rem;
+    font-weight: 700;
+    text-align: center;
+    text-decoration: none;
+    transition: background 160ms;
   }
-  .nav-link:hover:not(:disabled),
+  .nav-link:hover,
   .nav-link[aria-current] {
     color: var(--ink);
     background: var(--raised);
@@ -322,7 +331,7 @@
     flex-wrap: wrap;
     gap: 16px;
     color: var(--muted);
-    font-size: 0.68rem;
+    font-size: 0.75rem;
   }
   .footer-brand {
     color: var(--ink);
@@ -374,7 +383,7 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    font-size: 0.69rem;
+    font-size: 0.75rem;
     color: var(--muted);
     margin-bottom: 0;
   }
@@ -598,7 +607,7 @@
     height: 32px;
     display: grid;
     place-items: center;
-    font-size: 0.7rem;
+    font-size: 0.75rem;
   }
   .portrait-caption {
     padding: 21px 24px 24px;
@@ -643,9 +652,9 @@
   }
   .eyebrow {
     color: var(--muted);
-    font-size: 0.64rem;
+    font-size: 0.75rem;
     font-weight: 700;
-    letter-spacing: 0.17em;
+    letter-spacing: 0.14em;
     line-height: 1.8;
     text-transform: uppercase;
     margin-bottom: 20px;
@@ -685,7 +694,7 @@
     gap: 10px;
     color: var(--accent);
     letter-spacing: 0.13em;
-    font-size: 0.6rem;
+    font-size: 0.75rem;
   }
   .hero-eyebrow > span {
     height: 5px;
@@ -711,7 +720,7 @@
     gap: 10px;
     margin-top: 30px;
     color: #c4cabb;
-    font-size: 0.65rem;
+    font-size: 0.8rem;
   }
   .hero-meta .icon {
     width: 17px;
@@ -847,7 +856,7 @@
   }
   .art-caption {
     position: absolute;
-    inset-inline-end: 1%;
+    right: 1%;
     bottom: 3%;
     color: var(--muted);
     font-size: 0.55rem;
@@ -877,7 +886,7 @@
     height: 33px;
     border: 1px solid var(--input-line);
     border-radius: 50%;
-    font-size: 0.66rem;
+    font-size: 0.75rem;
     font-weight: 550;
   }
   .home-grid h2 {
@@ -887,7 +896,7 @@
     font-size: 0.86rem;
   }
   .home-grid .small {
-    font-size: 0.68rem;
+    font-size: 0.75rem;
   }
   .host-card {
     background: linear-gradient(125deg, #23392c, #18271f);
@@ -1041,7 +1050,7 @@
     font-weight: 400;
     color: var(--muted);
     margin-top: 4px;
-    font-size: 0.7rem;
+    font-size: 0.75rem;
   }
   .table-link > .icon {
     color: var(--accent);
@@ -1205,12 +1214,44 @@
     margin-bottom: 24px;
     background: #263423;
   }
-  .invite-strip > div {
+  .invite-strip > div:first-child {
     flex: 1;
   }
   .invite-strip .small {
     display: block;
     color: #d0d7bc;
+  }
+  .invite-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  .invite-scan {
+    flex-basis: 100%;
+    display: flex;
+    align-items: center;
+    gap: 18px;
+  }
+  .invite-scan > p {
+    margin: 0;
+  }
+  .invite-qr {
+    width: 132px;
+    height: 132px;
+    flex-shrink: 0;
+    border-radius: 6px;
+    forced-color-adjust: none;
+  }
+  .invite-panel {
+    max-width: 560px;
+    margin: 28px auto 0;
+  }
+  .invite-panel h1 {
+    font-size: 2rem;
+    margin-bottom: 14px;
+  }
+  .invite-panel > .small {
+    margin-top: 18px;
   }
   .join-code {
     display: block;
@@ -1221,20 +1262,6 @@
     letter-spacing: 0.27em;
     direction: ltr;
     unicode-bidi: isolate;
-  }
-  .invite-strip.compact {
-    padding-block: 16px;
-  }
-  .invite-strip.compact .join-code {
-    font-size: 1.2rem;
-  }
-  .invite-strip.compact > div {
-    display: flex;
-    align-items: center;
-    gap: 18px;
-  }
-  .invite-strip.compact .join-code {
-    margin: 0;
   }
   .role-group {
     padding: 24px 0 14px;
@@ -1275,7 +1302,7 @@
   .role-count small {
     display: block;
     font-weight: 400;
-    font-size: 0.66rem;
+    font-size: 0.75rem;
     color: var(--muted);
     margin-top: 5px;
   }
@@ -1324,7 +1351,7 @@
   .player-info small {
     display: block;
     margin-top: 3px;
-    font-size: 0.69rem;
+    font-size: 0.75rem;
     color: var(--muted);
   }
   .player-info .player-status {
@@ -1340,7 +1367,7 @@
     border: 1px solid var(--line);
     border-radius: 5px;
     color: var(--ink);
-    font-size: 0.65rem;
+    font-size: 0.75rem;
   }
   .player-list .out .avatar {
     background: transparent;
@@ -1354,18 +1381,18 @@
     border: 1px solid #607154;
     border-radius: 50%;
     flex-shrink: 0;
-    font-size: 0.65rem;
+    font-size: 0.75rem;
     color: #c8d7b6;
     background: #283b29;
   }
   .you {
-    font-size: 0.7rem;
+    font-size: 0.75rem;
     color: var(--muted);
   }
   .badge {
     display: inline-block;
     padding: 5px 9px;
-    font-size: 0.66rem;
+    font-size: 0.75rem;
     line-height: 1.6;
     font-weight: 600;
     border: 1px solid currentColor;
@@ -1490,6 +1517,7 @@
   }
   .night-card {
     background: #152421;
+    scroll-margin-block: 16px;
   }
   .night-card.your-turn {
     border-color: #b7af79;
@@ -1612,12 +1640,12 @@
     margin-bottom: 10px;
   }
   .timer > div > p:last-child {
-    font-size: 0.72rem;
+    font-size: 0.75rem;
     margin-top: 8px;
   }
   .timer .check {
     max-width: 135px;
-    font-size: 0.72rem;
+    font-size: 0.75rem;
     margin: 0;
   }
   .clock {
@@ -1687,7 +1715,7 @@
     overflow-wrap: anywhere;
   }
   .timeline time {
-    font-size: 0.65rem;
+    font-size: 0.75rem;
     color: var(--muted);
   }
   .result-card {
@@ -1720,7 +1748,7 @@
     padding: 24px 20px;
   }
   .stat h2 {
-    font-size: 0.7rem;
+    font-size: 0.75rem;
     color: var(--muted);
     min-height: 32px;
     letter-spacing: 0;
@@ -1802,7 +1830,7 @@
     flex: 1;
     padding-inline: 10px;
     background: transparent;
-    font-size: 0.74rem;
+    font-size: 0.75rem;
     color: var(--muted);
     min-width: 90px;
   }
@@ -1882,6 +1910,9 @@
   .recovery-dialog > p {
     font-size: 0.88rem;
   }
+  .recovery-dialog > button + p {
+    margin-top: 10px;
+  }
   .recovery-code {
     display: block;
     padding: 18px;
@@ -1923,7 +1954,7 @@
       gap: 3px;
     }
     .nav-link {
-      font-size: 0.72rem;
+      font-size: 0.75rem;
       padding-inline: 8px;
     }
     .hero {
@@ -1975,7 +2006,7 @@
     .hero-meta {
       max-width: 270px;
       line-height: 1.7;
-      font-size: 0.6rem;
+      font-size: 0.75rem;
     }
     .header-inner {
       flex-wrap: wrap;
@@ -2062,7 +2093,7 @@
     }
     .language select {
       max-width: 95px;
-      font-size: 0.74rem;
+      font-size: 0.75rem;
       min-height: 48px;
     }
     .contrast-toggle {
@@ -2072,7 +2103,7 @@
     .nav-link {
       min-height: 48px;
       padding: 8px;
-      font-size: 0.74rem;
+      font-size: 0.75rem;
     }
     main {
       padding-inline: 18px;
@@ -2080,13 +2111,16 @@
     }
     .hero {
       grid-template-columns: 1fr;
-      padding: 38px 0 28px;
+      /* The tilted cards may pass the screen edge. Cut them there, so the page does not scroll sideways. */
+      margin-inline: -18px;
+      padding: 38px 18px 28px;
+      overflow-x: clip;
       text-align: center;
     }
     .hero-eyebrow {
       justify-content: center;
-      font-size: 0.52rem;
-      letter-spacing: 0.09em;
+      font-size: 0.75rem;
+      letter-spacing: 0.06em;
       margin-bottom: 22px;
     }
     .hero h1 {
@@ -2101,7 +2135,7 @@
     .hero-meta {
       max-width: none;
       justify-content: center;
-      font-size: 0.58rem;
+      font-size: 0.75rem;
       margin-top: 22px;
     }
     .table-art {
@@ -2150,7 +2184,7 @@
     }
     .art-caption {
       bottom: 3%;
-      inset-inline-end: 4%;
+      right: 4%;
     }
     .art-token {
       width: 45px;
@@ -2176,7 +2210,7 @@
       margin-bottom: 23px;
     }
     .home-grid .small {
-      font-size: 0.7rem;
+      font-size: 0.75rem;
     }
     .join-fields {
       grid-template-columns: 1fr;
@@ -2249,7 +2283,7 @@
     .site-footer {
       margin-inline: 18px;
       padding-block: 26px;
-      font-size: 0.61rem;
+      font-size: 0.75rem;
       gap: 18px;
     }
     .site-footer > span:nth-child(2) {
@@ -2273,28 +2307,36 @@
     .page-intro > p:last-child {
       font-size: 0.87rem;
     }
+    .game-intro {
+      padding-block: 10px 14px;
+    }
+    .game-intro h1 {
+      font-size: 2rem;
+      margin-bottom: 10px;
+    }
+    .game-intro .eyebrow {
+      margin-bottom: 8px;
+    }
+    .game-intro > p:last-child {
+      font-size: 0.8rem;
+    }
     .invite-strip {
       padding: 21px;
       gap: 14px;
     }
     .invite-strip .small {
-      font-size: 0.67rem;
+      font-size: 0.75rem;
     }
     .join-code {
       font-size: 1.65rem;
     }
-    .invite-strip > button {
+    .invite-actions > button {
       padding-inline: 12px;
       font-size: 0.76rem;
     }
-    .invite-strip.compact {
-      padding: 17px;
-    }
-    .invite-strip.compact > div {
-      display: block;
-    }
-    .invite-strip.compact .join-code {
-      margin-top: 5px;
+    .invite-qr {
+      width: 116px;
+      height: 116px;
     }
     .invite-strip > span:empty {
       display: none;

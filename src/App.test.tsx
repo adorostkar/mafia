@@ -11,7 +11,7 @@ import {
 import "@testing-library/jest-dom/vitest";
 import axe from "axe-core";
 import App from "./App";
-import { request } from "./client";
+import { errorCode, request } from "./client";
 import { translations } from "./i18n";
 
 vi.mock("./client", () => ({
@@ -32,6 +32,7 @@ afterEach(() => {
   window.localStorage.clear();
   history.replaceState(null, "", "/");
   vi.clearAllMocks();
+  vi.unstubAllGlobals();
 });
 
 it("introduces factions on the homepage and opens the library for character details", async () => {
@@ -138,7 +139,7 @@ it("switches Persian layout and learning content without losing a player's form 
   expect(screen.getByLabelText("نام شما")).toHaveValue("آرمان");
   expect(screen.getByLabelText("کد ورود")).toHaveValue("ABC234");
   expect(screen.getByRole("button", { name: /ساخت بازی/ })).toBeVisible();
-  fireEvent.click(screen.getByRole("button", { name: "روش بازی" }));
+  fireEvent.click(screen.getByRole("link", { name: "روش بازی" }));
   fireEvent.click(
     await screen.findByRole("button", { name: "کتابخانهٔ شخصیت‌ها" }),
   );
@@ -161,4 +162,37 @@ it("accepts join-code digits from Persian and Arabic keyboards", async () => {
   fireEvent.change(code, { target: { value: "ABC٢٣٤" } });
   expect(code).toHaveValue("ABC234");
   expect(code).toBeValid();
+});
+
+it("keeps the first page where the browser opened it and moves focus after navigation", async () => {
+  render(<App />);
+  await waitFor(() => expect(screen.getByLabelText("Your name")).toBeEnabled());
+  expect(screen.getByRole("main")).not.toHaveFocus();
+  expect(document.title).toBe("Mafia Table");
+  const menu = within(screen.getByRole("navigation", { name: "Main menu" }));
+  fireEvent.click(menu.getByRole("link", { name: "How to play" }));
+  expect(screen.getByRole("main")).toHaveFocus();
+  expect(location.search).toBe("?view=rules");
+  expect(document.title).toBe("How to play · Mafia Table");
+});
+
+it("welcomes an invited visitor with a join form instead of an error", async () => {
+  vi.stubGlobal(
+    "EventSource",
+    class {
+      addEventListener() {}
+      close() {}
+    },
+  );
+  vi.mocked(request).mockRejectedValueOnce(new Error("forbidden"));
+  vi.mocked(errorCode).mockReturnValueOnce("forbidden");
+  history.replaceState(null, "", "/?game=ABC234");
+  render(<App />);
+  expect(
+    await screen.findByRole("heading", { name: "Your seat is waiting" }),
+  ).toBeVisible();
+  expect(screen.getByText(/You are invited to table ABC234/)).toBeVisible();
+  expect(screen.getByLabelText("Your name")).toBeRequired();
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  expect(screen.queryByText(/Reconnecting/)).not.toBeInTheDocument();
 });

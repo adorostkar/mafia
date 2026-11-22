@@ -50,6 +50,7 @@ export function ErrorNotice({
 
 export function ConfirmAction({
   label,
+  ariaLabel,
   description,
   confirmLabel,
   disabled,
@@ -57,6 +58,7 @@ export function ConfirmAction({
   t,
 }: {
   label: string;
+  ariaLabel?: string;
   description: string;
   confirmLabel?: string;
   disabled: boolean;
@@ -77,6 +79,7 @@ export function ConfirmAction({
         type="button"
         ref={trigger}
         disabled={disabled}
+        aria-label={ariaLabel}
         aria-expanded={open}
         aria-controls={id}
         onClick={() => setOpen(!open)}

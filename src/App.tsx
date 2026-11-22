@@ -185,7 +185,7 @@ function Home({
       <div className="home-grid">
         <section className="panel host-card" aria-labelledby="host-title">
           <div className="card-top">
-            <span className="step">01</span>
+            <span className="step">{t.number(1).padStart(2, t.number(0))}</span>
             <Icon name="users" />
           </div>
           <h2 id="host-title">{t.text.hostTitle}</h2>
@@ -203,7 +203,7 @@ function Home({
         </section>
         <section className="panel join-card" aria-labelledby="join-title">
           <div className="card-top">
-            <span className="step">02</span>
+            <span className="step">{t.number(2).padStart(2, t.number(0))}</span>
             <Icon name="lock" />
           </div>
           <h2 id="join-title">{t.text.joinTitle}</h2>
@@ -320,24 +320,30 @@ function LiveTable({
   home: () => void;
 }) {
   const live = useGame(code, identity.id);
+  // A visitor with an invite is not a member yet. That is not an error.
+  const invited = !live.game && live.error === "forbidden";
   return (
     <>
       <div className="connection-line">
-        <p className={`connection ${live.connection}`} role="status">
-          <span aria-hidden="true" />
-          {live.connection === "offline"
-            ? t.text.reconnecting
-            : t.text[live.connection]}
-        </p>
+        {live.game && (
+          <p className={`connection ${live.connection}`} role="status">
+            <span aria-hidden="true" />
+            {live.connection === "offline"
+              ? t.text.reconnecting
+              : t.text[live.connection]}
+          </p>
+        )}
       </div>
-      {live.error && (
+      {live.error && !invited && (
         <ErrorNotice
           code={live.error}
           t={t}
           retry={
             live.error === "authentication"
               ? () => location.reload()
-              : live.refresh
+              : live.error === "removed"
+                ? undefined
+                : live.refresh
           }
           dismiss={live.game ? live.dismiss : undefined}
         />
@@ -353,10 +359,10 @@ function LiveTable({
         />
       ) : !live.error ? (
         <p role="status">{t.text.loading}</p>
-      ) : live.error === "forbidden" ? (
-        <section className="panel">
-          <h1>{t.text.joinTitle}</h1>
-          <p>{t.text.joinPrivacy}</p>
+      ) : invited ? (
+        <section className="panel invite-panel" aria-labelledby="invite-title">
+          <h1 id="invite-title">{t.text.joinTitle}</h1>
+          <p>{t.message("invitedTo", { code })}</p>
           <form
             onSubmit={(event) => {
               event.preventDefault();
@@ -372,12 +378,14 @@ function LiveTable({
               name="name"
               maxLength={40}
               autoComplete="nickname"
+              defaultValue={identity.username ?? ""}
               required
             />
             <button className="primary full">
               {t.text.join} · {code}
             </button>
           </form>
+          <p className="small muted">{t.text.joinPrivacy}</p>
         </section>
       ) : null}
     </>
@@ -402,13 +410,26 @@ export default function App() {
   const [entryVersion, setEntryVersion] = useState(0);
   const main = useRef<HTMLElement>(null);
   const entering = useRef(false);
+  const shownRoute = useRef(route);
   const t = translations(language);
+  const pageTitle =
+    route.page === "home"
+      ? t.text.brand
+      : `${
+          route.page === "game"
+            ? route.code
+            : route.page === "report"
+              ? t.message("reportTitle", { code: route.code })
+              : route.page === "reset"
+                ? t.text.recover
+                : t.text[route.page]
+        } · ${t.text.brand}`;
   useEffect(() => {
     document.documentElement.lang = language;
     document.documentElement.dir = t.meta.direction;
     document.documentElement.dataset.contrast = String(contrast);
-    document.title = t.text.brand;
-  }, [language, contrast, t]);
+    document.title = pageTitle;
+  }, [language, contrast, t, pageTitle]);
   useEffect(() => {
     let active = true;
     void initialize()
@@ -423,7 +444,11 @@ export default function App() {
     };
   }, []);
   useEffect(() => {
-    main.current?.focus();
+    // The first page keeps the browser's own position, so the header stays in view.
+    if (shownRoute.current === route) return;
+    shownRoute.current = route;
+    main.current?.focus({ preventScroll: true });
+    document.documentElement.scrollTop = 0;
   }, [route]);
   useEffect(() => {
     if (route.page === "reset" && location.hash)
@@ -511,17 +536,27 @@ export default function App() {
               <small>{t.text.tagline}</small>
             </span>
           </a>
-          <nav aria-label={t.text.home}>
+          <nav aria-label={t.text.mainMenu}>
             {(["rules", "reports", "account"] as const).map((page) => (
-              <button
+              <a
                 key={page}
                 className="nav-link"
+                href={routeUrl({ page })}
                 aria-current={route.page === page ? "page" : undefined}
-                disabled={page !== "rules" && !identity}
-                onClick={() => navigate({ page })}
+                onClick={(event) => {
+                  if (
+                    !event.metaKey &&
+                    !event.ctrlKey &&
+                    !event.shiftKey &&
+                    event.button === 0
+                  ) {
+                    event.preventDefault();
+                    navigate({ page });
+                  }
+                }}
               >
                 {t.text[page]}
-              </button>
+              </a>
             ))}
             <label className="language">
               <span className="sr-only">{t.text.language}</span>

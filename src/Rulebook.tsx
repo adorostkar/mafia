@@ -106,7 +106,9 @@ export function Rulebook({
             ] as const
           ).map((key, index) => (
             <section className="panel rule-panel" key={key}>
-              <span className="step">{String(index + 1).padStart(2, "0")}</span>
+              <span className="step">
+                {t.number(index + 1).padStart(2, t.number(0))}
+              </span>
               <h2>{t.rulebook[`${key}Title`]}</h2>
               <p>{t.rulebook[key]}</p>
             </section>

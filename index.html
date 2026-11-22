@@ -7,16 +7,21 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta
       name="description"
-      content="An accessible, bilingual table for a game of Mafia."
+      content="An accessible table for a game of Mafia, in English, Finnish and Persian."
     />
     <title>Mafia Table</title>
   </head>
   <body>
     <div id="root"></div>
-    <noscript
-      >This game needs JavaScript. Enable it to join your table. / Tämä peli
-      vaatii JavaScriptin. Ota se käyttöön liittyäksesi pöytään.</noscript
-    >
+    <noscript>
+      <p>This game needs JavaScript. Enable it to join your table.</p>
+      <p lang="fi">
+        Tämä peli vaatii JavaScriptin. Ota se käyttöön liittyäksesi pöytään.
+      </p>
+      <p lang="fa" dir="rtl">
+        این بازی به جاوااسکریپت نیاز دارد. برای پیوستن به میز، آن را فعال کنید.
+      </p>
+    </noscript>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

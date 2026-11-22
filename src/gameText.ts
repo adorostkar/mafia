@@ -6,12 +6,13 @@ import {
   type PublicEvent,
   type Winner,
 } from "../shared/game";
+import { isolate } from "../shared/input";
 import type { Translation } from "./i18n";
 
 type NamedPlayer = { id: string; name: string };
 export function playerName(players: NamedPlayer[], id: string, t: Translation) {
-  return (
-    players.find((player) => player.id === id)?.name || t.text.deletedPlayer
+  return isolate(
+    players.find((player) => player.id === id)?.name || t.text.deletedPlayer,
   );
 }
 export function names(players: NamedPlayer[], ids: string[], t: Translation) {

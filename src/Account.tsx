@@ -22,6 +22,11 @@ export function RecoveryDialog({
   const dialog = useRef<HTMLDialogElement>(null);
   const [visible, setVisible] = useState(false);
   const [error, setError] = useState(false);
+  // The dialog can close only after the code was shown, copied or downloaded.
+  const [kept, setKept] = useState(false);
+  const [copyStatus, setCopyStatus] = useState<
+    "recoveryCopied" | "copyError" | null
+  >(null);
   useEffect(() => {
     const node = dialog.current!;
     node.showModal();
@@ -54,13 +59,36 @@ export function RecoveryDialog({
         className="secondary"
         aria-expanded={visible}
         aria-controls="recovery-secret"
-        onClick={() => setVisible(!visible)}
+        onClick={() => {
+          setVisible(!visible);
+          setKept(true);
+        }}
       >
         {visible ? t.text.hideRecovery : t.text.revealRecovery}
       </button>
       <div id="recovery-secret" role="status" aria-atomic="true">
         {visible && <code className="recovery-code">{recovery.code}</code>}
       </div>
+      <button
+        className="secondary full"
+        onClick={async () => {
+          try {
+            await navigator.clipboard.writeText(recovery.code);
+            setCopyStatus("recoveryCopied");
+          } catch (error) {
+            console.error("Clipboard unavailable", error);
+            setCopyStatus("copyError");
+            setVisible(true);
+          }
+          setKept(true);
+        }}
+      >
+        <Icon name="copy" />
+        {t.text.copyRecovery}
+      </button>
+      <p className="small" role="status">
+        {copyStatus ? t.text[copyStatus] : ""}
+      </p>
       <button
         className="secondary full"
         onClick={() => {
@@ -74,6 +102,7 @@ export function RecoveryDialog({
               "text/plain;charset=utf-8",
             );
             setError(false);
+            setKept(true);
           } catch (error) {
             console.error("Recovery download failed", error);
             setError(true);
@@ -83,10 +112,20 @@ export function RecoveryDialog({
         {t.text.downloadRecovery}
       </button>
       {error && <p role="alert">{t.error.server}</p>}
-      <button className="primary full" onClick={onSaved}>
+      <button
+        className="primary full"
+        disabled={!kept}
+        aria-describedby={kept ? undefined : "recovery-first"}
+        onClick={onSaved}
+      >
         {t.text.savedRecovery}
         <Icon name="check" />
       </button>
+      {!kept && (
+        <p className="small muted" id="recovery-first">
+          {t.text.saveRecoveryFirst}
+        </p>
+      )}
     </dialog>
   );
 }

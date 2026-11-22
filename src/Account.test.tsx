@@ -21,6 +21,7 @@ vi.mock("./client", () => ({
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  Reflect.deleteProperty(navigator, "clipboard");
 });
 const guest = {
   id: "guest",
@@ -232,8 +233,45 @@ it("keeps recovery secrets hidden from the screen and accessibility tree until r
     />,
   );
   expect(screen.queryByText("test-only-recovery-code")).not.toBeInTheDocument();
+  expect(
+    screen.getByRole("button", { name: t.text.savedRecovery }),
+  ).toBeDisabled();
+  expect(screen.getByText(t.text.saveRecoveryFirst)).toBeVisible();
   fireEvent.click(screen.getByRole("button", { name: t.text.revealRecovery }));
   expect(screen.getByText("test-only-recovery-code")).toBeVisible();
+  expect(screen.queryByText(t.text.saveRecoveryFirst)).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: t.text.savedRecovery }));
+  expect(onSaved).toHaveBeenCalledOnce();
+});
+
+it("lets the recovery dialog close after the code was copied", async () => {
+  HTMLDialogElement.prototype.showModal = function () {
+    this.open = true;
+  };
+  HTMLDialogElement.prototype.close = function () {
+    this.open = false;
+  };
+  const writeText = vi.fn(async () => {});
+  Object.defineProperty(navigator, "clipboard", {
+    value: { writeText },
+    configurable: true,
+  });
+  const onSaved = vi.fn();
+  render(
+    <RecoveryDialog
+      recovery={{
+        username: "aino",
+        code: "test-only-recovery-code",
+        recovered: false,
+      }}
+      t={t}
+      onSaved={onSaved}
+    />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: t.text.copyRecovery }));
+  expect(await screen.findByText(t.text.recoveryCopied)).toBeVisible();
+  expect(writeText).toHaveBeenCalledWith("test-only-recovery-code");
+  expect(screen.queryByText("test-only-recovery-code")).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: t.text.savedRecovery }));
   expect(onSaved).toHaveBeenCalledOnce();
 });
