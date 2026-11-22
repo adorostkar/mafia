@@ -1,0 +1,21 @@
+services:
+  mafia:
+    build: .
+    ports:
+      - "127.0.0.1:3001:3001"
+    environment:
+      PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:?Set PUBLIC_ORIGIN to your HTTPS origin}
+      TRUST_PROXY: ${TRUST_PROXY:-}
+    volumes:
+      - mafia-data:/app/data
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+volumes:
+  mafia-data:
