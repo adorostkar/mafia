@@ -18,9 +18,11 @@ npm ci
 npm run dev
 ```
 
-Open **http://localhost:5173**. For phones on the same trusted network, use
-`http://<your-computer-LAN-IP>:5173`. The development server forwards game requests
-to the local backend. Do not expose the development server to the internet.
+Open **http://localhost:5173**. The development server listens on this computer
+only. To try the app from phones on the same trusted network, run
+`npm run dev:lan` and open `http://<your-computer-LAN-IP>:5173`. The development
+server forwards game requests to the local backend. Do not expose the
+development server to the internet.
 
 To run the built app:
 
@@ -39,7 +41,8 @@ email service, API key, or external account is needed.
 
 ### Play a match
 
-1. The GM creates a table and shares its six-character join code.
+1. The GM creates a table and invites the players. The lobby shows a
+   six-character join code, an invite link, and a QR code for the link.
 2. Between 4 and 30 players join with a name. The GM is not a player.
 3. The GM suggests or edits role counts, chooses the voting style, and saves.
 4. Everyone reviews **How to play**. The GM confirms this and assigns roles.
@@ -58,11 +61,15 @@ report URLs can also be bookmarked.
 Many games can run at the same time. Each has its own join code, players, and
 private state. One profile can host up to five active tables.
 
-Display names must be unique within a table, ignoring letter case. A registered
+Display names must be unique within a table. Names that look the same count as
+the same name: the app ignores letter case, invisible characters, and different
+ways to write the same letter. A registered
 player cannot take a guest's occupied name or seat; they must choose another
 display name. **Guest** and **Registered player** labels identify the account
 type without revealing usernames or email addresses. A label is not proof of
 someone's real-world identity.
+
+The QR code is drawn in the browser. No outside service sees the join code.
 
 This is an in-person companion app. It does not include voice or video chat.
 For remote play, use a separate call and keep private role screens out of screen
@@ -105,7 +112,7 @@ available to a screen reader. Reduced-motion settings disable the animation.
 | Citizen / green      | Gunman         | Give out two loaded guns in total and any number of blanks, at most one gun per night. The recipient cannot see the ammunition.                                                            |
 | Citizen / green      | Constantine    | Revive one previously eliminated player, once per game. Cannot revive players who left or victims of Sixth Sense or Terrorist.                                                             |
 | Citizen / green      | Simple Citizen | Discuss and vote. Can use a gun received from Gunman.                                                                                                                                      |
-| Third Party / yellow | Zodiac         | One vest and one night attack that ignores all defenses. Wins alive among the last two players.                                                                                            |
+| Third Party / yellow | Zodiac         | One vest. One attack each night that ignores all defenses. Wins alive among the last two players.                                                                                          |
 | Third Party / yellow | Nostradamus    | Inspect three players on introduction night, then choose a secret winning side. Godfather does not count as Mafia. Three apparent Mafia forces a Mafia choice. Immune to ordinary bullets. |
 
 Each special role has a limit of one. Simple Mafia and Simple Citizens can fill
@@ -155,9 +162,11 @@ even if eliminated, but does not change Mafia's head count.
 
 Players who leave cannot win. Leaving is paused during voting and defense.
 Leaving the lobby frees a seat; that profile can rejoin while the lobby is open.
+Until they join again, they cannot see the table or its report. A player the GM
+removed from the lobby cannot join that table again.
 A player who leaves an active match cannot take the seat back.
 
-If no one remains alive, or 50 regular nights pass without an earlier win, the
+If no one remains alive, or 50 regular nights pass without a win, the
 match is a draw. A GM can cancel a table that cannot continue. Cancelled games
 have reports but do not affect wins, losses, or player statistics.
 
@@ -173,8 +182,9 @@ moving the guest history in that case.
 
 Passwords must be 15–128 characters. The server stores salted **scrypt** hashes,
 not passwords. Its settings are `N=131072, r=8, p=1`, with at most two password
-hash operations running at once. Allow enough server memory for this; 1 GB is a
-reasonable starting point for a small host.
+hash operations running at once. Up to 24 more wait in a queue for at most
+10 seconds each. Only then does the server answer that it is busy. Allow enough
+server memory for this; 1 GB is a reasonable starting point for a small host.
 
 The host chooses one of two recovery modes:
 
@@ -195,15 +205,20 @@ URL fragment, not the query string, and is removed from the address bar after
 the app reads it. Reset requests do not reveal whether an email has an account.
 
 An email account can create an optional backup recovery code in **Your profile**.
-Save it in a password manager or download it from the dialog. It is hidden until
-revealed and is only shown when created. Existing code-only accounts keep working
-if email is enabled later; they are not forced through registration again.
+Save it in a password manager, copy it, or download it from the dialog. It is
+hidden until revealed and is only shown when created. The dialog closes only
+after the code was revealed, copied, or downloaded. Existing code-only accounts
+keep working if email is enabled later; they are not forced through registration
+again.
 
 - Code recovery sets a new password, revokes old sessions, and gives a new
   recovery code. The old code and outstanding email reset links no longer work.
 - Changing a password or replacing a recovery code signs other devices out.
 - **Your profile** shows signed-in sessions and lets you revoke another device.
-- Account cookies expire after 30 days. Guest cookies expire after one year.
+- Account sessions end after 30 days without a visit. Guest sessions end after
+  one year without a visit. Each day of use renews them.
+- A guest profile with no table, no game history, and no account is deleted
+  after 7 days without a visit.
 - Losing a guest cookie without first creating an account loses access to that
   guest history. Without a password, a recovery code, or access to a verified
   email with email delivery enabled, an account cannot be recovered through the app.
@@ -221,6 +236,7 @@ older data until the host removes them.
 
 Reports show original and final roles, winning sides, votes, night choices,
 results, and the match timeline. Only participants and the GM can view them.
+People who left or were removed before the game started are not participants.
 Finished **and cancelled** matches reveal these facts to those participants.
 The join screen explains this before a player enters.
 
@@ -238,7 +254,9 @@ not just the current page.
 
 Roles are shuffled with server-side cryptographic randomness. A player's
 response does not contain other hidden roles. The GM sees all roles and night
-choices. A voted-out Terrorist is publicly revealed for the last move. All roles
+choices. Players are not told which role is awake at night, or how many night
+steps there are. A player sees a night step only while it is their own turn.
+A voted-out Terrorist is publicly revealed for the last move. All roles
 are visible when the game ends.
 
 This is **not end-to-end encryption**. The GM and server operator can access
@@ -352,6 +370,7 @@ in one transaction or leave the match unchanged.
 | `server/backup.ts`         | Online, checked database backups                  |
 | `src/useGame.ts`           | Live state, reconnect, and safe command retries   |
 | `src/GameTable.tsx`        | Lobby and GM/player game flows                    |
+| `src/Invite.tsx`           | Join code, invite link, sharing, and QR code      |
 | `src/Account.tsx`          | Sign-in, recovery, sessions, and privacy controls |
 | `src/CharacterLibrary.tsx` | Illustrated learning cards                        |
 | `src/FlipCard.tsx`         | Accessible card faces and reveal control          |
@@ -378,14 +397,25 @@ in one transaction or leave the match unchanged.
 
 Foreign keys, unique seat/action/vote constraints, and transactions protect
 stored state. Statistics are derived from records instead of separate counters.
-Game records are kept until the host removes them; the app does not silently
-expire match history. Expired sessions, pending registrations, and reset tokens
-are pruned on startup and hourly.
+
+Finished and cancelled games are kept until the host removes them. Other data
+is cleaned up on startup and every hour, so the database does not grow without
+limit:
+
+- Expired sessions, pending registrations, and reset tokens are deleted.
+- A lobby with no activity for 7 days is deleted. Nothing was played in it.
+- A started game with no activity for 30 days is cancelled. Its report stays.
+- Command receipts older than one day are deleted.
+- Guest profiles with no table, no game history, and no account are deleted
+  after 7 days without a visit.
 
 ### HTTP interface
 
-Start with `GET /api/me` to create or resume a cookie session. Write requests need
-JSON and `X-Mafia-Client: 1`. Cookies are HTTP-only and SameSite=Strict; production
+Start with `GET /api/me` and the header `X-Mafia-Client: 1` to create or resume
+a cookie session. Without that header, or when a link on another website sent
+the browser there, the server answers 401 and does not create a guest. This
+keeps another website from replacing a visitor's session. Write requests need
+JSON and the same header. Cookies are HTTP-only and SameSite=Strict; production
 cookies also require HTTPS. Session tokens are stored only as hashes.
 
 | Method     | Path                                                  | Purpose                                 |
@@ -466,6 +496,16 @@ headers. Without this setting, limits see the directly connected peer's IP.
 Limit settings allow a group to share one network, but are not a replacement for
 host-level abuse controls and monitoring.
 
+The main limits per IP address are: 120 new guest sessions per hour, 40 new
+tables per hour, and 20 emails per hour. Wrong sign-in attempts are limited to
+12 per 15 minutes for one username from one address, and 200 for one username
+from all addresses. So a stranger cannot lock an owner out with wrong guesses.
+Successful sign-ins are not counted.
+
+The server writes one short line to standard output for each change request and
+each failed API request: method, path, status, time, and error code. Join codes
+are replaced by `:code`. Addresses, names, and request bodies are not logged.
+
 ### Docker
 
 `Dockerfile` builds a non-root image. `compose.yaml` adds a persistent data volume,
@@ -545,6 +585,13 @@ Set **both** `RESEND_API_KEY` and `EMAIL_FROM` to enable email mode, or leave bo
 empty for code mode. Incomplete configuration stops startup with a clear error.
 `PUBLIC_ORIGIN` is required in email mode, including local tests.
 
+The app sends at most `EMAIL_DAILY_LIMIT` emails in any 24 hours. The default
+is 90, which fits the 100 emails per day of the Resend free plan. Sign-up codes
+may use up to 70% of that amount, so password resets still work when many
+people sign up. When the limit is reached, sign-up shows "Email could not be
+sent", and the server log gives the reason. Raise the value on a paid plan. The
+count is kept in memory and starts again when the app restarts.
+
 Settings take effect when the app is recreated during an approved deployment.
 Adding the key alone does not update the running container. After deployment,
 verify signup and password recovery with an inbox you own; local tests use a fake
@@ -615,3 +662,11 @@ own rulebook takes precedence when a game variant differs.
 - [i18next: Plural forms](https://www.i18next.com/translation-function/plurals)
 - [Resend: Verified domains](https://resend.com/docs/dashboard/domains/introduction)
 - [Resend: API keys](https://resend.com/docs/dashboard/api-keys/introduction)
+
+## License
+
+Mafia Table is open source under the [MIT License](LICENSE). You may use, copy,
+change, and share it, as long as you keep the copyright and license notice.
+
+The fonts are not covered by that license. They keep their own licenses, listed
+in `public/font-licenses.txt`.
