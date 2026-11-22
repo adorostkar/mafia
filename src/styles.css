@@ -425,6 +425,11 @@
     font-size: 0.8rem;
     color: var(--muted);
   }
+  /* On the home page the notice sits in the empty space above the title, so nothing moves when it goes away. */
+  .boot-status:has(+ .hero) {
+    position: absolute;
+    margin-top: 8px;
+  }
 }
 
 @layer components {

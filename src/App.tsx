@@ -1,4 +1,11 @@
-import { Component, useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  Component,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import type {
   ErrorCode,
   GameSummary,
@@ -424,7 +431,8 @@ export default function App() {
                 ? t.text.recover
                 : t.text[route.page]
         } · ${t.text.brand}`;
-  useEffect(() => {
+  // Set before the first paint. Otherwise a right-to-left page shows left-to-right for a moment.
+  useLayoutEffect(() => {
     document.documentElement.lang = language;
     document.documentElement.dir = t.meta.direction;
     document.documentElement.dataset.contrast = String(contrast);
