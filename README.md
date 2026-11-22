@@ -425,6 +425,36 @@ proxy. Do not assume the Docker gateway is a loopback address.
 
 The image checks `/healthz`. Watch logs, disk space, backup jobs, and health checks
 on the host. Test the image on a running Docker engine before deployment.
+The container has a 1 GB memory limit and bounded logs. Its database lives in the
+`mafia-data` volume, not in the container. Do not use `docker compose down -v`
+unless you intend to delete that database.
+
+### nginx at mafia.dorostkar.net
+
+`deploy/nginx.conf` is the site configuration for this domain. It redirects HTTP
+to HTTPS and forwards requests to `127.0.0.1:3001`. Buffering is off so night
+updates arrive immediately.
+
+This site uses the server's existing Cloudflare Origin CA certificate at
+`/etc/ssl/cert.pem` and key at `/etc/ssl/key.pem`. The certificate covers
+`*.dorostkar.net`. Keep the DNS record proxied through Cloudflare and use
+**Full (strict)** TLS there. Browsers do not trust this origin certificate when
+connecting directly to the server.
+
+Set `PUBLIC_ORIGIN=https://mafia.dorostkar.net` in the server's private `.env`
+file. Set `TRUST_PROXY` to the app container network's gateway address, after
+checking it with `docker network inspect`. Check this value again if you
+recreate the Docker network.
+
+Install `deploy/cloudflare-realip.conf` as
+`/etc/nginx/snippets/mafia-cloudflare-realip.conf`, and `deploy/nginx.conf` as
+`/etc/nginx/sites-available/mafia.conf`. Enable only that site with a symlink in
+`/etc/nginx/sites-enabled/`. Run `nginx -t` before reloading nginx. On this server,
+privileged commands go through `sudo-gate request`.
+
+The IP snippet trusts client-IP headers only from Cloudflare's published ranges.
+Keep it in sync with the two source URLs in the file. nginx replaces incoming
+forwarded headers before passing requests to the app.
 
 ### Backup, restore, and upgrades
 
