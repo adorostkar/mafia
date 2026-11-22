@@ -7,6 +7,7 @@ import { ErrorNotice } from "./ui";
 import { useRemote } from "./useRemote";
 
 export type Recovery = { code: string; username: string; recovered: boolean };
+export type AccountMode = "register" | "login" | "recover";
 type AccountResponse = { identity: Identity; recoveryCode?: string };
 
 export function RecoveryDialog({
@@ -119,6 +120,125 @@ function PasswordField({
   );
 }
 
+export function ResetPassword({
+  token,
+  t,
+  onIdentity,
+  onDone,
+}: {
+  token: string | null;
+  t: Translation;
+  onIdentity: (identity: Identity) => void;
+  onDone: (mode: AccountMode) => void;
+}) {
+  const [show, setShow] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState(false);
+  const [error, setError] = useState<ErrorCode | null>(null);
+  const pending = useRef(false);
+  return (
+    <>
+      <header className="page-intro">
+        <p className="eyebrow">{t.text.private}</p>
+        <h1>{t.text.resetPasswordTitle}</h1>
+        <p className="muted">{t.text.resetPasswordHelp}</p>
+      </header>
+      <section className="panel reset-panel">
+        <Icon name="lock" />
+        {done ? (
+          <>
+            <p className="notice" role="status">
+              {t.text.emailResetComplete}
+            </p>
+            <button className="primary full" onClick={() => onDone("login")}>
+              {t.text.login}
+              <Icon name="arrow" />
+            </button>
+          </>
+        ) : !token ? (
+          <>
+            <ErrorNotice code="resetLink" t={t} />
+            <button className="primary full" onClick={() => onDone("recover")}>
+              {t.text.sendResetLink}
+            </button>
+          </>
+        ) : (
+          <>
+            {error && (
+              <ErrorNotice code={error} t={t} dismiss={() => setError(null)} />
+            )}
+            <form
+              onSubmit={async (event) => {
+                event.preventDefault();
+                if (pending.current) return;
+                pending.current = true;
+                setBusy(true);
+                setError(null);
+                const data = new FormData(event.currentTarget);
+                try {
+                  const result = await request<AccountResponse>(
+                    "/auth/reset-password",
+                    {
+                      token,
+                      password: data.get("password"),
+                      confirmPassword: data.get("confirmPassword"),
+                    },
+                  );
+                  onIdentity(result.identity);
+                  setDone(true);
+                } catch (failure) {
+                  setError(errorCode(failure));
+                } finally {
+                  pending.current = false;
+                  setBusy(false);
+                }
+              }}
+            >
+              <fieldset disabled={busy}>
+                <legend className="sr-only">{t.text.resetPasswordTitle}</legend>
+                <PasswordField
+                  name="password"
+                  label={t.text.newPassword}
+                  scope="reset"
+                  show={show}
+                  fresh
+                />
+                <p className="small muted">{t.text.passwordHelp}</p>
+                <PasswordField
+                  name="confirmPassword"
+                  label={t.text.confirmPassword}
+                  scope="reset"
+                  show={show}
+                  fresh
+                />
+                <label className="check">
+                  <input
+                    type="checkbox"
+                    checked={show}
+                    onChange={(event) => setShow(event.target.checked)}
+                  />
+                  {t.text.showPassword}
+                </label>
+                <button className="primary full">
+                  {busy ? t.text.working : t.text.changePassword}
+                  <Icon name="check" />
+                </button>
+              </fieldset>
+            </form>
+            <button
+              className="quiet"
+              disabled={busy}
+              onClick={() => onDone("recover")}
+            >
+              {t.text.sendResetLink}
+            </button>
+          </>
+        )}
+      </section>
+    </>
+  );
+}
+
 function Sessions({ t }: { t: Translation }) {
   const { data, error, reload } = useRemote<SessionView[]>("/account/sessions");
   const [failure, setFailure] = useState<ErrorCode | null>(null);
@@ -188,49 +308,79 @@ export function Account({
   t,
   onIdentity,
   onRecovery,
+  initialMode = "register",
 }: {
   identity: Identity;
   t: Translation;
   onIdentity: (identity: Identity) => void;
   onRecovery: (recovery: Recovery) => void;
+  initialMode?: AccountMode;
 }) {
-  const [mode, setMode] = useState<"register" | "login" | "recover">(
-    "register",
-  );
+  const [mode, setMode] = useState<AccountMode>(initialMode);
   const [show, setShow] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<ErrorCode | null>(null);
-  const [message, setMessage] = useState("");
+  const [message, setMessage] = useState<keyof Translation["text"] | null>(
+    null,
+  );
   const [sessionVersion, setSessionVersion] = useState(0);
   const [deleteWord, setDeleteWord] = useState("");
+  const [editingEmail, setEditingEmail] = useState(false);
+  const [useRecoveryCode, setUseRecoveryCode] = useState(false);
+  const verificationField = useRef<HTMLInputElement>(null);
   const pending = useRef(false);
+  const verifying =
+    mode === "register" &&
+    identity.emailEnabled &&
+    !!identity.pendingEmail &&
+    !editingEmail;
+  const emailRecovery =
+    mode === "recover" && identity.emailEnabled && !useRecoveryCode;
+  useEffect(() => {
+    if (verifying) verificationField.current?.focus();
+  }, [verifying]);
 
   async function perform(
     path: string,
     body: object,
-    success: string,
+    success: keyof Translation["text"],
     username = identity.username ?? "",
   ) {
     if (pending.current) return false;
     pending.current = true;
     setBusy(true);
     setError(null);
-    setMessage("");
+    setMessage(null);
     try {
-      const result = await request<AccountResponse>(path, body);
-      onIdentity(result.identity);
-      if (result.recoveryCode)
-        onRecovery({
-          code: result.recoveryCode,
-          username,
-          recovered: path === "/auth/recover",
-        });
+      if (path === "/auth/request-reset") {
+        await request<{ ok: true }>(path, body);
+      } else {
+        const result = await request<AccountResponse>(path, body);
+        onIdentity(result.identity);
+        if (result.recoveryCode)
+          onRecovery({
+            code: result.recoveryCode,
+            username,
+            recovered: path === "/auth/recover",
+          });
+      }
       setMessage(success);
       setSessionVersion((value) => value + 1);
       if (path === "/auth/recover") setMode("login");
       return true;
     } catch (error) {
       setError(errorCode(error));
+      if (path === "/auth/register" && identity.emailEnabled) {
+        try {
+          onIdentity(await request<Identity>("/me"));
+          setEditingEmail(false);
+        } catch (refreshError) {
+          console.error(
+            "Could not refresh email verification state",
+            refreshError,
+          );
+        }
+      }
       return false;
     } finally {
       setBusy(false);
@@ -243,22 +393,33 @@ export function Account({
     const data = new FormData(form);
     const username = String(data.get("username")).trim().toLowerCase();
     const success = await perform(
-      `/auth/${mode}`,
-      {
-        username,
-        password: data.get("password"),
-        confirmPassword: data.get("confirmPassword"),
-        code: data.get("code"),
-        adoptGuest: data.get("adoptGuest") === "on",
-      },
-      mode === "recover"
-        ? t.text.recovered
-        : mode === "login"
-          ? t.text.signedIn
-          : t.text.recoverySaved,
+      emailRecovery ? "/auth/request-reset" : `/auth/${mode}`,
+      emailRecovery
+        ? { email: data.get("email"), language: t.language }
+        : {
+            username,
+            password: data.get("password"),
+            confirmPassword: data.get("confirmPassword"),
+            code: data.get("code"),
+            adoptGuest: data.get("adoptGuest") === "on",
+            email: data.get("email"),
+            language: t.language,
+          },
+      emailRecovery
+        ? "resetRequested"
+        : mode === "recover"
+          ? "recovered"
+          : mode === "login"
+            ? "signedIn"
+            : identity.emailEnabled
+              ? "verificationSent"
+              : "recoverySaved",
       username,
     );
-    if (success) form.reset();
+    if (success) {
+      form.reset();
+      setEditingEmail(false);
+    }
   }
   return (
     <>
@@ -273,7 +434,7 @@ export function Account({
             <ErrorNotice code={error} t={t} dismiss={() => setError(null)} />
           )}
           <p role="status" className={message ? "notice" : "sr-only"}>
-            {message}
+            {message ? t.text[message] : ""}
           </p>
           {identity.isGuest ? (
             <section className="panel account-form">
@@ -286,110 +447,253 @@ export function Account({
                     disabled={busy}
                     onClick={() => {
                       setMode(value);
+                      setUseRecoveryCode(false);
                       setError(null);
-                      setMessage("");
+                      setMessage(null);
                     }}
                   >
                     {t.text[value]}
                   </button>
                 ))}
               </div>
-              <h2>{t.text[mode]}</h2>
+              <h2>{verifying ? t.text.checkEmail : t.text[mode]}</h2>
               <p className="muted">
-                {mode === "recover"
-                  ? t.text.recoveryIntro
-                  : t.text.keepStoryText}
+                {verifying
+                  ? t.text.verificationHelp
+                  : emailRecovery
+                    ? t.text.emailRecoveryIntro
+                    : mode === "recover"
+                      ? t.text.recoveryIntro
+                      : mode === "register" && identity.emailEnabled
+                        ? t.text.emailRequired
+                        : t.text.keepStoryText}
               </p>
-              <form key={mode} onSubmit={(event) => void credentials(event)}>
-                <fieldset disabled={busy}>
-                  <legend className="sr-only">{t.text[mode]}</legend>
-                  <div className="form-field">
-                    <label htmlFor="account-username">{t.text.username}</label>
-                    <input
-                      id="account-username"
-                      name="username"
-                      autoComplete="username"
-                      autoCapitalize="none"
-                      spellCheck={false}
-                      minLength={3}
-                      maxLength={30}
-                      pattern="[a-zA-Z0-9_]{3,30}"
-                      aria-describedby="username-help"
-                      required
-                    />
-                    <p className="small muted" id="username-help">
-                      {t.text.usernameHelp}
-                    </p>
-                  </div>
-                  {mode === "recover" && (
-                    <div className="form-field">
-                      <label htmlFor="account-code">
-                        {t.text.recoveryCode}
+              {verifying ? (
+                <>
+                  <p>
+                    {t.text.verificationDestination}
+                    <br />
+                    <bdi dir="ltr">{identity.pendingEmail}</bdi>
+                  </p>
+                  <form
+                    onSubmit={async (event) => {
+                      event.preventDefault();
+                      const form = event.currentTarget;
+                      if (
+                        await perform(
+                          "/auth/verify-email",
+                          { code: new FormData(form).get("code") },
+                          "emailVerified",
+                        )
+                      )
+                        form.reset();
+                    }}
+                  >
+                    <fieldset disabled={busy}>
+                      <legend className="sr-only">{t.text.verifyEmail}</legend>
+                      <label htmlFor="verification-code">
+                        {t.text.verificationCode}
                       </label>
                       <input
-                        id="account-code"
+                        id="verification-code"
+                        ref={verificationField}
                         name="code"
-                        type={show ? "text" : "password"}
-                        autoComplete="off"
-                        autoCapitalize="none"
-                        spellCheck={false}
-                        minLength={32}
-                        maxLength={32}
+                        className="code-input"
+                        dir="ltr"
+                        inputMode="numeric"
+                        autoComplete="one-time-code"
+                        pattern="[0-9۰-۹٠-٩]{6}"
+                        minLength={6}
+                        maxLength={6}
                         required
                       />
-                    </div>
-                  )}
-                  <PasswordField
-                    name="password"
-                    label={
-                      mode === "recover" ? t.text.newPassword : t.text.password
-                    }
-                    scope="credentials"
-                    show={show}
-                    fresh={mode !== "login"}
-                  />
-                  {mode !== "login" && (
-                    <>
-                      <p className="small muted">{t.text.passwordHelp}</p>
+                      <button className="primary full">
+                        {busy ? t.text.working : t.text.verifyEmail}
+                        <Icon name="check" />
+                      </button>
+                    </fieldset>
+                  </form>
+                  <div className="button-row">
+                    <button
+                      className="secondary"
+                      disabled={busy}
+                      onClick={() =>
+                        void perform(
+                          "/auth/resend-verification",
+                          { language: t.language },
+                          "verificationSent",
+                        )
+                      }
+                    >
+                      {t.text.resendVerification}
+                    </button>
+                    <button
+                      className="quiet"
+                      disabled={busy}
+                      onClick={() => {
+                        setEditingEmail(true);
+                        setError(null);
+                        setMessage(null);
+                      }}
+                    >
+                      {t.text.startAgain}
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <form key={mode} onSubmit={(event) => void credentials(event)}>
+                  <fieldset disabled={busy}>
+                    <legend className="sr-only">{t.text[mode]}</legend>
+                    {!emailRecovery && (
+                      <div className="form-field">
+                        <label htmlFor="account-username">
+                          {mode === "login" && identity.emailEnabled
+                            ? t.text.loginIdentifier
+                            : t.text.username}
+                        </label>
+                        <input
+                          id="account-username"
+                          name="username"
+                          autoComplete="username"
+                          autoCapitalize="none"
+                          spellCheck={false}
+                          minLength={3}
+                          maxLength={
+                            mode === "login" && identity.emailEnabled ? 254 : 30
+                          }
+                          pattern={
+                            mode === "login" && identity.emailEnabled
+                              ? undefined
+                              : "[a-zA-Z0-9_]{3,30}"
+                          }
+                          aria-describedby={
+                            mode === "login" ? undefined : "username-help"
+                          }
+                          dir="ltr"
+                          required
+                        />
+                        {mode !== "login" && (
+                          <p className="small muted" id="username-help">
+                            {t.text.usernameHelp}
+                          </p>
+                        )}
+                      </div>
+                    )}
+                    {((mode === "register" && identity.emailEnabled) ||
+                      emailRecovery) && (
+                      <div className="form-field">
+                        <label htmlFor="account-email">
+                          {t.text.emailAddress}
+                        </label>
+                        <input
+                          id="account-email"
+                          name="email"
+                          type="email"
+                          dir="ltr"
+                          autoComplete="email"
+                          autoCapitalize="none"
+                          spellCheck={false}
+                          maxLength={254}
+                          defaultValue={identity.pendingEmail ?? ""}
+                          required
+                        />
+                      </div>
+                    )}
+                    {mode === "recover" && !emailRecovery && (
+                      <div className="form-field">
+                        <label htmlFor="account-code">
+                          {t.text.recoveryCode}
+                        </label>
+                        <input
+                          id="account-code"
+                          name="code"
+                          type={show ? "text" : "password"}
+                          autoComplete="off"
+                          autoCapitalize="none"
+                          spellCheck={false}
+                          minLength={32}
+                          maxLength={32}
+                          required
+                        />
+                      </div>
+                    )}
+                    {!emailRecovery && (
                       <PasswordField
-                        name="confirmPassword"
-                        label={t.text.confirmPassword}
+                        name="password"
+                        label={
+                          mode === "recover"
+                            ? t.text.newPassword
+                            : t.text.password
+                        }
                         scope="credentials"
                         show={show}
-                        fresh
+                        fresh={mode !== "login"}
                       />
-                    </>
-                  )}
-                  <label className="check">
-                    <input
-                      type="checkbox"
-                      checked={show}
-                      onChange={(event) => setShow(event.target.checked)}
-                    />
-                    {t.text.showPassword}
-                  </label>
-                  {mode === "login" && (
-                    <>
+                    )}
+                    {mode !== "login" && !emailRecovery && (
+                      <>
+                        <p className="small muted">{t.text.passwordHelp}</p>
+                        <PasswordField
+                          name="confirmPassword"
+                          label={t.text.confirmPassword}
+                          scope="credentials"
+                          show={show}
+                          fresh
+                        />
+                      </>
+                    )}
+                    {!emailRecovery && (
                       <label className="check">
                         <input
                           type="checkbox"
-                          name="adoptGuest"
-                          defaultChecked
-                          aria-describedby="adopt-help"
+                          checked={show}
+                          onChange={(event) => setShow(event.target.checked)}
                         />
-                        {t.text.adoptGuest}
+                        {t.text.showPassword}
                       </label>
-                      <p id="adopt-help" className="small muted">
-                        {t.text.adoptGuestHelp}
-                      </p>
-                    </>
-                  )}
-                  <button className="primary full">
-                    {busy ? t.text.working : t.text[mode]}
-                    <Icon name="arrow" />
-                  </button>
-                </fieldset>
-              </form>
+                    )}
+                    {mode === "login" && (
+                      <>
+                        <label className="check">
+                          <input
+                            type="checkbox"
+                            name="adoptGuest"
+                            defaultChecked
+                            aria-describedby="adopt-help"
+                          />
+                          {t.text.adoptGuest}
+                        </label>
+                        <p id="adopt-help" className="small muted">
+                          {t.text.adoptGuestHelp}
+                        </p>
+                      </>
+                    )}
+                    <button className="primary full">
+                      {busy
+                        ? t.text.working
+                        : emailRecovery
+                          ? t.text.sendResetLink
+                          : t.text[mode]}
+                      <Icon name="arrow" />
+                    </button>
+                  </fieldset>
+                </form>
+              )}
+              {mode === "recover" && identity.emailEnabled && (
+                <button
+                  className="quiet"
+                  disabled={busy}
+                  onClick={() => {
+                    setUseRecoveryCode(!useRecoveryCode);
+                    setError(null);
+                    setMessage(null);
+                  }}
+                >
+                  {useRecoveryCode
+                    ? t.text.useEmailRecovery
+                    : t.text.useRecoveryCode}
+                </button>
+              )}
             </section>
           ) : (
             <>
@@ -398,12 +702,32 @@ export function Account({
                   {identity.username?.slice(0, 1).toUpperCase()}
                 </span>
                 <h2>{identity.username}</h2>
+                {identity.email && (
+                  <p>
+                    <bdi dir="ltr">{identity.email}</bdi>
+                    <br />
+                    <span className="small muted">{t.text.verifiedEmail}</span>
+                  </p>
+                )}
+                {identity.email && identity.emailEnabled && (
+                  <button
+                    className="quiet"
+                    disabled={busy}
+                    onClick={() =>
+                      void perform(
+                        "/auth/request-reset",
+                        { email: identity.email, language: t.language },
+                        "resetRequested",
+                      )
+                    }
+                  >
+                    {t.text.sendResetLink}
+                  </button>
+                )}
                 <button
                   className="secondary"
                   disabled={busy}
-                  onClick={() =>
-                    void perform("/auth/logout", {}, t.text.signedOut)
-                  }
+                  onClick={() => void perform("/auth/logout", {}, "signedOut")}
                 >
                   {t.text.logout}
                 </button>
@@ -420,7 +744,7 @@ export function Account({
                       await perform(
                         "/account/password",
                         Object.fromEntries(data),
-                        t.text.passwordChanged,
+                        "passwordChanged",
                       )
                     )
                       form.reset();
@@ -463,8 +787,14 @@ export function Account({
                 </form>
               </section>
               <section className="panel">
-                <h2>{t.text.replaceRecovery}</h2>
-                <p className="muted">{t.text.replaceRecoveryHelp}</p>
+                <h2>
+                  {identity.email ? t.text.backupCode : t.text.replaceRecovery}
+                </h2>
+                <p className="muted">
+                  {identity.email
+                    ? t.text.backupCodeHelp
+                    : t.text.replaceRecoveryHelp}
+                </p>
                 <form
                   onSubmit={async (event) => {
                     event.preventDefault();
@@ -473,7 +803,7 @@ export function Account({
                       await perform(
                         "/account/recovery",
                         Object.fromEntries(new FormData(form)),
-                        t.text.recoverySaved,
+                        "recoverySaved",
                       )
                     )
                       form.reset();
@@ -481,7 +811,9 @@ export function Account({
                 >
                   <fieldset disabled={busy}>
                     <legend className="sr-only">
-                      {t.text.replaceRecovery}
+                      {identity.email
+                        ? t.text.backupCode
+                        : t.text.replaceRecovery}
                     </legend>
                     <PasswordField
                       name="password"
@@ -490,7 +822,11 @@ export function Account({
                       show={show}
                     />
                     <button className="secondary full">
-                      {busy ? t.text.working : t.text.replaceRecovery}
+                      {busy
+                        ? t.text.working
+                        : identity.email
+                          ? t.text.backupCode
+                          : t.text.replaceRecovery}
                     </button>
                   </fieldset>
                 </form>
@@ -503,6 +839,7 @@ export function Account({
             <Icon name="lock" />
             <h2>{t.text.keepStory}</h2>
             <p>{t.text.privacyNote}</p>
+            {identity.emailEnabled && <p>{t.text.emailPrivacy}</p>}
             <p className="small muted">{t.text.profileNote}</p>
           </section>
           {!identity.isGuest && <Sessions key={sessionVersion} t={t} />}
@@ -550,7 +887,7 @@ export function Account({
                       confirm: true,
                       ...(identity.isGuest ? {} : { password }),
                     },
-                    t.text.profileDeleted,
+                    "profileDeleted",
                   );
                 }}
               >

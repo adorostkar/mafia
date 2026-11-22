@@ -12,7 +12,8 @@ import {
   type VotingMode,
 } from "../shared/game";
 import type { Translation } from "./i18n";
-import { Emblem, Icon } from "./Art";
+import { Icon } from "./Art";
+import { FlipCard } from "./FlipCard";
 import {
   actionText,
   eventText,
@@ -186,6 +187,7 @@ function Players({ game, t, disabled, send }: Controls) {
         <h2 id="players-title">{t.text.players}</h2>
         <span className="count">{t.number(game.players.length)}</span>
       </div>
+      <p className="small muted">{t.text.playerIdentityHelp}</p>
       {game.players.length === 0 ? (
         <div className="empty-state">
           <Icon name="users" />
@@ -197,22 +199,29 @@ function Players({ game, t, disabled, send }: Controls) {
             <li key={player.id} className={!player.alive ? "out" : ""}>
               <div className="player-info">
                 <span className="avatar" aria-hidden="true">
-                  {String(index + 1).padStart(2, "0")}
+                  {t.number(index + 1).padStart(2, t.number(0))}
                 </span>
                 <div>
-                  <strong>{player.name || t.text.deletedPlayer}</strong>
+                  <strong>
+                    <bdi>{player.name || t.text.deletedPlayer}</bdi>
+                  </strong>
                   {player.id === game.selfId && (
                     <span className="you"> · {t.text.you}</span>
                   )}
-                  {game.phase !== "lobby" && (
-                    <small>
-                      {player.left
-                        ? t.text.leftGame
-                        : player.alive
-                          ? t.text.alive
-                          : t.text.eliminated}
-                    </small>
-                  )}
+                  <small className="player-status">
+                    <span className="identity-badge">
+                      {player.isGuest ? t.text.guest : t.text.registeredPlayer}
+                    </span>
+                    {game.phase !== "lobby" && (
+                      <span>
+                        {player.left
+                          ? t.text.leftGame
+                          : player.alive
+                            ? t.text.alive
+                            : t.text.eliminated}
+                      </span>
+                    )}
+                  </small>
                   {player.role &&
                     (game.isGm ||
                       game.phase === "finished" ||
@@ -252,18 +261,23 @@ function PrivateRole({ game, t }: Pick<Controls, "game" | "t">) {
   const self = game.players.find((player) => player.id === game.selfId);
   useEffect(() => {
     const conceal = () => {
-      if (document.visibilityState !== "visible") {
-        setRevealed(false);
-        setMessages(false);
-      }
+      setRevealed(false);
+      setMessages(false);
     };
-    document.addEventListener("visibilitychange", conceal);
-    return () => document.removeEventListener("visibilitychange", conceal);
+    const visibilityChanged = () => {
+      if (document.visibilityState !== "visible") conceal();
+    };
+    document.addEventListener("visibilitychange", visibilityChanged);
+    window.addEventListener("blur", conceal);
+    return () => {
+      document.removeEventListener("visibilitychange", visibilityChanged);
+      window.removeEventListener("blur", conceal);
+    };
   }, []);
   if (!self?.role) return null;
   return (
     <section
-      className={`panel private-card ${revealed ? `revealed ${roles[self.role].faction}` : ""}`}
+      className="panel private-card"
       aria-labelledby="private-role-title"
     >
       <div className="section-heading">
@@ -272,54 +286,54 @@ function PrivateRole({ game, t }: Pick<Controls, "game" | "t">) {
       </div>
       <h2 id="private-role-title">{t.text.yourRole}</h2>
       <p className="muted">{t.text.hidden}</p>
-      <button
-        className="secondary full"
-        aria-expanded={revealed}
-        aria-controls="private-role"
-        onClick={() => setRevealed(!revealed)}
-      >
-        <Icon name="eye" />
-        {revealed ? t.text.hide : t.text.reveal}
-      </button>
-      <div id="private-role" role="status" aria-atomic="true">
-        {revealed && (
-          <div className="revealed-role">
-            <Emblem faction={roles[self.role].faction} />
-            <RoleBadge role={self.role} t={t} />
-            {game.rulesVersion === RULES_VERSION && (
-              <p>{t.roleDescription[self.role]}</p>
-            )}
-            {game.abilities?.alignment && (
-              <p className="notice">
-                {t.message("alignment", {
-                  faction: t.faction[game.abilities.alignment],
-                })}
-              </p>
-            )}
-            {self.role === "sniper" && (
-              <p>
-                {t.message("remainingShots", {
-                  count: game.abilities?.sniperShots ?? 0,
-                })}
-              </p>
-            )}
-            {self.role === "doctor" && (
-              <p>
-                {t.message("remainingHeals", {
-                  count: game.abilities?.selfHeals ?? 0,
-                })}
-              </p>
-            )}
-            {self.role === "gunman" && (
-              <p>
-                {t.message("remainingGuns", {
-                  count: game.abilities?.gunSupply ?? 0,
-                })}
-              </p>
-            )}
+      <FlipCard
+        className="private-role-flip"
+        revealed={revealed}
+        onToggle={() => setRevealed(!revealed)}
+        label={revealed ? t.text.hide : t.text.reveal}
+        announcement={t.message("roleDetails", { role: t.role[self.role] })}
+        front={
+          <div className="role-sleeve">
+            <Icon name="lock" />
+            <p>{t.text.roleReady}</p>
           </div>
-        )}
-      </div>
+        }
+      >
+        <div className="revealed-role">
+          <RoleBadge role={self.role} t={t} />
+          {game.rulesVersion === RULES_VERSION && (
+            <p>{t.roleDescription[self.role]}</p>
+          )}
+          {game.abilities?.alignment && (
+            <p className="notice">
+              {t.message("alignment", {
+                faction: t.faction[game.abilities.alignment],
+              })}
+            </p>
+          )}
+          {self.role === "sniper" && (
+            <p>
+              {t.message("remainingShots", {
+                count: game.abilities?.sniperShots ?? 0,
+              })}
+            </p>
+          )}
+          {self.role === "doctor" && (
+            <p>
+              {t.message("remainingHeals", {
+                count: game.abilities?.selfHeals ?? 0,
+              })}
+            </p>
+          )}
+          {self.role === "gunman" && (
+            <p>
+              {t.message("remainingGuns", {
+                count: game.abilities?.gunSupply ?? 0,
+              })}
+            </p>
+          )}
+        </div>
+      </FlipCard>
       <div className="private-messages">
         <h3>{t.text.privateInbox}</h3>
         <p className="small" role="status">
@@ -1156,7 +1170,11 @@ export function GameTable({
             </section>
           )}
           {!game.isGm && game.phase !== "lobby" && (
-            <PrivateRole game={game} t={t} />
+            <PrivateRole
+              key={`${game.code}:${game.selfId}:${self?.role}`}
+              game={game}
+              t={t}
+            />
           )}
           {!game.isGm && currentRules && game.phase === "night" && (
             <NightTurn key={`${game.day}-${game.window}`} {...controls} />

@@ -1,8 +1,9 @@
-Mafia Table includes the Manrope and Fraunces fonts, served locally.
-Both fonts use the SIL Open Font License below.
+Mafia Table includes the Manrope, Fraunces, and Vazirmatn fonts, served locally.
+All three fonts use the SIL Open Font License below.
 
 Copyright 2019 The Manrope Project Authors (https://github.com/sharanda/manrope)
 Copyright 2020 The Fraunces Project Authors (github.com/undercasetype/Fraunces) Fraunces-Italic[SOFT,WONK,opsz,wght].ttf: Copyright 2020 The Fraunces Project Authors (github.com/undercasetype/Fraunces)
+Copyright 2015 The Vazirmatn Project Authors (https://github.com/rastikerdar/vazirmatn)
 
 This Font Software is licensed under the SIL Open Font License, Version 1.1.
 This license is copied below, and is also available with a FAQ at:

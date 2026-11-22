@@ -29,7 +29,14 @@ void engine.init({
   lng: "en",
   fallbackLng: "en",
   initAsync: false,
-  interpolation: { escapeValue: false },
+  interpolation: {
+    escapeValue: false,
+    alwaysFormat: true,
+    format: (value, _format, language) =>
+      typeof value === "number"
+        ? new Intl.NumberFormat(supportedLanguage(language)).format(value)
+        : String(value),
+  },
 });
 
 export function supportedLanguage(value: string | null | undefined): Language {

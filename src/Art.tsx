@@ -66,7 +66,7 @@ export function Icon({
   };
   return (
     <svg
-      className="icon"
+      className={name === "arrow" ? "icon directional-icon" : "icon"}
       width="20"
       height="20"
       viewBox="0 0 24 24"

@@ -1,6 +1,9 @@
 import { factions, roleIds, roles } from "../shared/game";
 import type { Translation } from "./i18n";
 import { Emblem } from "./Art";
+import { CharacterLibrary } from "./CharacterLibrary";
+
+export type LearningSection = "rules" | "characters";
 
 export function Cast({
   t,
@@ -51,7 +54,15 @@ export function Cast({
   );
 }
 
-export function Rulebook({ t }: { t: Translation }) {
+export function Rulebook({
+  t,
+  section,
+  onSectionChange,
+}: {
+  t: Translation;
+  section: LearningSection;
+  onSectionChange: (section: LearningSection) => void;
+}) {
   return (
     <>
       <header className="page-intro">
@@ -59,27 +70,50 @@ export function Rulebook({ t }: { t: Translation }) {
         <h1>{t.text.rulesTitle}</h1>
         <p className="muted">{t.text.rulesIntro}</p>
       </header>
-      <div className="rules-grid">
-        {(
-          [
-            "flow",
-            "voting",
-            "night",
-            "defense",
-            "victory",
-            "moderation",
-            "privacy",
-            "origin",
-          ] as const
-        ).map((key, index) => (
-          <section className="panel rule-panel" key={key}>
-            <span className="step">{String(index + 1).padStart(2, "0")}</span>
-            <h2>{t.rulebook[`${key}Title`]}</h2>
-            <p>{t.rulebook[key]}</p>
-          </section>
-        ))}
+      <div
+        className="switcher learning-switcher"
+        role="group"
+        aria-label={t.text.learningSections}
+      >
+        <button
+          type="button"
+          aria-pressed={section === "rules"}
+          onClick={() => onSectionChange("rules")}
+        >
+          {t.text.rulesOverview}
+        </button>
+        <button
+          type="button"
+          aria-pressed={section === "characters"}
+          onClick={() => onSectionChange("characters")}
+        >
+          {t.text.characterLibrary}
+        </button>
       </div>
-      <Cast t={t} />
+      {section === "characters" ? (
+        <CharacterLibrary t={t} />
+      ) : (
+        <div className="rules-grid">
+          {(
+            [
+              "flow",
+              "voting",
+              "night",
+              "defense",
+              "victory",
+              "moderation",
+              "privacy",
+              "origin",
+            ] as const
+          ).map((key, index) => (
+            <section className="panel rule-panel" key={key}>
+              <span className="step">{String(index + 1).padStart(2, "0")}</span>
+              <h2>{t.rulebook[`${key}Title`]}</h2>
+              <p>{t.rulebook[key]}</p>
+            </section>
+          ))}
+        </div>
+      )}
     </>
   );
 }

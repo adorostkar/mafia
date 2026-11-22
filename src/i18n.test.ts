@@ -95,3 +95,15 @@ it("uses language-specific plural forms and interpolates names without building 
     }),
   ).toBe("Aino näyttää kuuluvan ryhmään Mafia.");
 });
+
+it("formats Persian counts inside announcements without changing names or join codes", () => {
+  const t = translations("fa");
+  expect(t.message("playersCount", { count: 4 })).toBe("۴ بازیکن");
+  expect(t.message("timerRemaining", { timer: "چالش", count: 10 })).toBe(
+    "چالش: ۱۰ ثانیه باقی مانده.",
+  );
+  expect(t.message("reportTitle", { code: "ABC234" })).toBe("بازی ABC234");
+  expect(
+    t.message("playerAction", { action: "انتخاب", name: "Player 2" }),
+  ).toBe("انتخاب: Player 2");
+});

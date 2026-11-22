@@ -6,6 +6,7 @@ import {
   fireEvent,
   render,
   screen,
+  within,
 } from "@testing-library/react";
 import "@testing-library/jest-dom/vitest";
 import axe from "axe-core";
@@ -17,6 +18,7 @@ import { suggestedCounts, type GameView } from "../shared/game";
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 function game(overrides: Partial<GameView> = {}): GameView {
   return {
@@ -30,6 +32,7 @@ function game(overrides: Partial<GameView> = {}): GameView {
       {
         id: "doctor",
         name: "Aino",
+        isGuest: true,
         role: "doctor",
         originalRole: "doctor",
         alive: true,
@@ -39,6 +42,7 @@ function game(overrides: Partial<GameView> = {}): GameView {
       {
         id: "target",
         name: "Matti",
+        isGuest: false,
         role: null,
         originalRole: null,
         alive: true,
@@ -103,6 +107,56 @@ it("reveals roles only on request and preserves reveal state when switching lang
   expect(screen.getByText("Lääkäri · Kansalaiset")).toBeVisible();
   fireEvent.click(screen.getByRole("button", { name: "Piilota roolini" }));
   expect(screen.queryByText("Lääkäri · Kansalaiset")).not.toBeInTheDocument();
+});
+
+it("conceals private role details on focus loss, backgrounding, and role changes", () => {
+  const state = game();
+  const { rerender } = render(<GameTable {...controls} game={state} />);
+  fireEvent.click(screen.getByRole("button", { name: t.text.reveal }));
+  expect(screen.getByText(t.roleDescription.doctor)).toBeVisible();
+  fireEvent.blur(window);
+  expect(screen.queryByText(t.roleDescription.doctor)).not.toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole("button", { name: t.text.reveal }));
+  vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+  fireEvent(document, new Event("visibilitychange"));
+  expect(screen.queryByText(t.roleDescription.doctor)).not.toBeInTheDocument();
+
+  vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+  fireEvent(document, new Event("visibilitychange"));
+  expect(screen.getByRole("button", { name: t.text.reveal })).toHaveAttribute(
+    "aria-expanded",
+    "false",
+  );
+  fireEvent.click(screen.getByRole("button", { name: t.text.reveal }));
+  rerender(
+    <GameTable
+      {...controls}
+      game={game({
+        players: state.players.map((player) =>
+          player.id === state.selfId ? { ...player, role: "mafia" } : player,
+        ),
+      })}
+    />,
+  );
+  expect(screen.queryByText(t.roleDescription.mafia)).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: t.text.reveal }));
+  expect(screen.getByText(t.roleDescription.mafia)).toBeVisible();
+});
+
+it("distinguishes guest and account seats with translated labels, not hidden roles", () => {
+  const state = game();
+  const { rerender } = render(<GameTable {...controls} game={state} />);
+  const roster = within(screen.getByRole("region", { name: "Players" }));
+  const seats = roster.getAllByRole("listitem");
+  expect(seats[0]).toHaveTextContent("Aino");
+  expect(seats[0]).toHaveTextContent("Guest");
+  expect(seats[1]).toHaveTextContent("Matti");
+  expect(seats[1]).toHaveTextContent("Registered player");
+  expect(roster.queryByText("Doctor · Citizen")).not.toBeInTheDocument();
+  rerender(<GameTable {...controls} game={state} t={translations("fi")} />);
+  expect(seats[0]).toHaveTextContent("Vieras");
+  expect(seats[1]).toHaveTextContent("Rekisteröity pelaaja");
 });
 
 it.each([true, false])(
@@ -257,6 +311,7 @@ it("collects three distinct prediction targets and forces a Mafia alignment when
       {
         id: "doctor",
         name: "Aino",
+        isGuest: true,
         role: "nostradamus",
         originalRole: "nostradamus",
         alive: true,
@@ -266,6 +321,7 @@ it("collects three distinct prediction targets and forces a Mafia alignment when
       ...["one", "two", "three", "four"].map((id) => ({
         id,
         name: id,
+        isGuest: true,
         role: null,
         originalRole: null,
         alive: true,

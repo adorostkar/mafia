@@ -5,6 +5,7 @@ import type {
   GameView,
   Identity,
 } from "../shared/game";
+import { normalizeDigits } from "../shared/input";
 import { errorCode, initialize, replaceIdentity, request } from "./client";
 import {
   languages,
@@ -12,18 +13,25 @@ import {
   translations,
   type Translation,
 } from "./i18n";
-import { Account, RecoveryDialog, type Recovery } from "./Account";
+import {
+  Account,
+  RecoveryDialog,
+  ResetPassword,
+  type AccountMode,
+  type Recovery,
+} from "./Account";
 import { Emblem, Icon } from "./Art";
 import { GameTable } from "./GameTable";
 import { MatchReport, Reports } from "./Reports";
-import { Cast, Rulebook } from "./Rulebook";
+import { Cast, Rulebook, type LearningSection } from "./Rulebook";
 import { ErrorNotice } from "./ui";
 import { useGame } from "./useGame";
 import { useRemote } from "./useRemote";
 import "./styles.css";
 
 type Route =
-  | { page: "home" | "account" | "rules" | "reports" }
+  | { page: "home" | "account" | "reports" | "reset" }
+  | { page: "rules"; section?: LearningSection }
   | { page: "game" | "report"; code: string };
 function currentRoute(): Route {
   const params = new URLSearchParams(location.search);
@@ -31,12 +39,22 @@ function currentRoute(): Route {
   if (code && /^[A-HJ-NP-Z2-9]{6}$/.test(code))
     return { page: params.get("view") === "report" ? "report" : "game", code };
   const page = params.get("view");
+  if (page === "rules")
+    return {
+      page: "rules",
+      section: params.get("section") === "characters" ? "characters" : "rules",
+    };
   return {
     page:
-      page === "account" || page === "rules" || page === "reports"
+      page === "account" || page === "reports" || page === "reset"
         ? page
         : "home",
   };
+}
+function currentResetToken() {
+  if (new URLSearchParams(location.search).get("view") !== "reset") return null;
+  const token = new URLSearchParams(location.hash.slice(1)).get("token");
+  return token && /^[A-Za-z0-9_-]{43}$/.test(token) ? token : null;
 }
 function routeUrl(route: Route) {
   return route.page === "home"
@@ -45,7 +63,9 @@ function routeUrl(route: Route) {
       ? `?game=${route.code}`
       : route.page === "report"
         ? `?view=report&game=${route.code}`
-        : `?view=${route.page}`;
+        : route.page === "rules" && route.section === "characters"
+          ? "?view=rules&section=characters"
+          : `?view=${route.page}`;
 }
 function readPreference(key: string) {
   try {
@@ -101,6 +121,7 @@ function Home({
   join,
   open,
   account,
+  learn,
   initialCode = "",
 }: {
   t: Translation;
@@ -110,6 +131,7 @@ function Home({
   join: (code: string, name: string) => void;
   open: (code: string) => void;
   account: () => void;
+  learn: () => void;
   initialCode?: string;
 }) {
   return (
@@ -216,6 +238,7 @@ function Home({
                     id="code"
                     name="code"
                     className="code-input"
+                    dir="ltr"
                     autoComplete="off"
                     autoCapitalize="characters"
                     spellCheck={false}
@@ -225,6 +248,11 @@ function Home({
                     placeholder="ABC234"
                     aria-describedby="code-help"
                     defaultValue={initialCode}
+                    onChange={(event) => {
+                      event.currentTarget.value = normalizeDigits(
+                        event.currentTarget.value,
+                      );
+                    }}
                     required
                   />
                 </div>
@@ -260,6 +288,12 @@ function Home({
         ))}
       </section>
       <Cast t={t} compact />
+      <div className="library-callout">
+        <button className="secondary" onClick={learn}>
+          {t.text.characterLibrary}
+          <Icon name="arrow" />
+        </button>
+      </div>
       {identity?.isGuest && (
         <section className="account-invite panel">
           <div>
@@ -364,6 +398,8 @@ export default function App() {
     () => readPreference("mafia-contrast") === "true",
   );
   const [route, setRoute] = useState<Route>(currentRoute);
+  const [resetToken, setResetToken] = useState(currentResetToken);
+  const [accountMode, setAccountMode] = useState<AccountMode>("register");
   const [identity, setIdentity] = useState<Identity | null>(null);
   const [recovery, setRecovery] = useState<Recovery | null>(null);
   const [busy, setBusy] = useState(false);
@@ -396,12 +432,24 @@ export default function App() {
     main.current?.focus();
   }, [route]);
   useEffect(() => {
+    if (route.page === "reset" && location.hash)
+      history.replaceState(null, "", `${location.pathname}${location.search}`);
+  }, [route, resetToken]);
+  useEffect(() => {
     const pop = () => {
       setRoute(currentRoute());
+      setResetToken(currentResetToken());
       setError(null);
     };
+    const hash = () => {
+      if (currentRoute().page === "reset") pop();
+    };
     window.addEventListener("popstate", pop);
-    return () => window.removeEventListener("popstate", pop);
+    window.addEventListener("hashchange", hash);
+    return () => {
+      window.removeEventListener("popstate", pop);
+      window.removeEventListener("hashchange", hash);
+    };
   }, []);
   function preference(key: string, value: string) {
     try {
@@ -412,6 +460,7 @@ export default function App() {
     }
   }
   function navigate(next: Route) {
+    if (next.page !== "reset") setResetToken(null);
     history.pushState(null, "", routeUrl(next));
     setRoute(next);
     setError(null);
@@ -556,9 +605,16 @@ export default function App() {
             join={(code, name) => void enter(code, name)}
             open={(code) => navigate({ page: "game", code })}
             account={() => navigate({ page: "account" })}
+            learn={() => navigate({ page: "rules", section: "characters" })}
           />
         )}
-        {route.page === "rules" && <Rulebook t={t} />}
+        {route.page === "rules" && (
+          <Rulebook
+            t={t}
+            section={route.section ?? "rules"}
+            onSectionChange={(section) => navigate({ page: "rules", section })}
+          />
+        )}
         {route.page === "game" && identity && (
           <LiveTable
             key={`${route.code}-${identity.id}-${entryVersion}`}
@@ -587,6 +643,18 @@ export default function App() {
             t={t}
             onIdentity={changeIdentity}
             onRecovery={setRecovery}
+            initialMode={accountMode}
+          />
+        )}
+        {route.page === "reset" && identity && (
+          <ResetPassword
+            token={resetToken}
+            t={t}
+            onIdentity={changeIdentity}
+            onDone={(mode) => {
+              setAccountMode(mode);
+              navigate({ page: "account" });
+            }}
           />
         )}
       </main>
