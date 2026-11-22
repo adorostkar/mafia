@@ -1,26 +1,23 @@
 import { factions, roleIds, roles } from "../shared/game";
 import type { Translation } from "./i18n";
-import { Emblem } from "./Art";
+import { Emblem, Icon } from "./Art";
 import { CharacterLibrary } from "./CharacterLibrary";
 
 export type LearningSection = "rules" | "characters";
 
-export function Cast({
+export function FactionPreview({
   t,
-  compact = false,
+  onLearn,
 }: {
   t: Translation;
-  compact?: boolean;
+  onLearn: () => void;
 }) {
   return (
-    <section
-      className={`cast-section ${compact ? "compact" : ""}`}
-      aria-labelledby="cast-title"
-    >
+    <section className="cast-section" aria-labelledby="factions-title">
       <div className="section-heading">
         <div>
           <p className="eyebrow">{t.text.afterDark}</p>
-          <h2 id="cast-title">{t.text.meetCast}</h2>
+          <h2 id="factions-title">{t.text.factionsTitle}</h2>
           <p className="muted">{t.text.castIntro}</p>
         </div>
         <span className="star-mark" aria-hidden="true">
@@ -28,27 +25,29 @@ export function Cast({
         </span>
       </div>
       <div className="faction-grid">
-        {factions.map((faction, index) => (
+        {factions.map((faction) => (
           <article className={`faction-card ${faction}`} key={faction}>
             <div className="card-top">
-              <span className="eyebrow">0{index + 1}</span>
+              <span className="eyebrow">
+                {t.message("rolesCount", {
+                  count: roleIds.filter(
+                    (role) => roles[role].faction === faction,
+                  ).length,
+                })}
+              </span>
               <span aria-hidden="true">✦</span>
             </div>
             <Emblem faction={faction} />
             <h3>{t.faction[faction]}</h3>
             <p>{t.text[`${faction}Motto`]}</p>
-            <div className="cast-roles">
-              {roleIds
-                .filter((role) => roles[role].faction === faction)
-                .map((role) => (
-                  <details key={role}>
-                    <summary>{t.role[role]}</summary>
-                    <p>{t.roleDescription[role]}</p>
-                  </details>
-                ))}
-            </div>
           </article>
         ))}
+      </div>
+      <div className="library-callout">
+        <button className="secondary" onClick={onLearn}>
+          {t.text.characterLibrary}
+          <Icon name="arrow" />
+        </button>
       </div>
     </section>
   );

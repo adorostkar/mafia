@@ -6,11 +6,13 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import "@testing-library/jest-dom/vitest";
 import axe from "axe-core";
 import App from "./App";
 import { request } from "./client";
+import { translations } from "./i18n";
 
 vi.mock("./client", () => ({
   initialize: vi.fn(async () => ({
@@ -30,6 +32,26 @@ afterEach(() => {
   window.localStorage.clear();
   history.replaceState(null, "", "/");
   vi.clearAllMocks();
+});
+
+it("introduces factions on the homepage and opens the library for character details", async () => {
+  const t = translations("en");
+  render(<App />);
+  await waitFor(() => expect(screen.getByLabelText("Your name")).toBeEnabled());
+  const home = within(screen.getByRole("main"));
+  for (const name of ["Mafia", "Citizen", "Third Party"]) {
+    expect(home.getByRole("heading", { name, level: 3 })).toBeVisible();
+  }
+  expect(
+    home.queryByText("Godfather", { exact: true }),
+  ).not.toBeInTheDocument();
+  expect(home.queryByText(t.roleDescription.godfather)).not.toBeInTheDocument();
+  fireEvent.click(home.getByRole("button", { name: "Character library" }));
+  expect(screen.getAllByRole("button", { name: /^Read role:/ })).toHaveLength(
+    13,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Read role: Godfather" }));
+  expect(screen.getByText(t.roleDescription.godfather)).toBeVisible();
 });
 
 it("removes reset tokens from the address bar and waits for a new password before using them", async () => {

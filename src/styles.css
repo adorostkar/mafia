@@ -1173,26 +1173,6 @@
   .faction-card .card-top {
     margin-bottom: 12px;
   }
-  .cast-roles {
-    margin-top: 24px;
-    border-top: 1px solid currentColor;
-  }
-  .cast-roles details {
-    border-bottom: 1px solid #ffffff1f;
-  }
-  .cast-roles summary {
-    font-size: 0.76rem;
-    font-weight: 550;
-  }
-  .cast-roles p {
-    color: var(--ink);
-    font-size: 0.8rem;
-    line-height: 1.8;
-  }
-  .cast-roles details[open] > summary {
-    margin-bottom: 10px;
-    font-weight: 700;
-  }
   .account-invite {
     display: flex;
     justify-content: space-between;
@@ -2257,9 +2237,6 @@
     }
     .faction-card h3 {
       font-size: 1.9rem;
-    }
-    .cast-roles summary {
-      font-size: 0.8rem;
     }
     .account-invite {
       flex-direction: column;

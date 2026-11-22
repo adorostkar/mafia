@@ -81,6 +81,9 @@ Open **How to play → Character library** to browse all 13 roles in their facti
 groups. Each has its own original illustration. Tap or use the keyboard to flip
 from artwork and name to the role description.
 
+The homepage has a short faction overview and a link to this library, rather
+than a second set of character descriptions.
+
 During play, the private role card has a neutral hidden face and **no character
 artwork on either side**. Revealing it shows the role, faction, description, and
 remaining abilities together. Hide it with the same control; it also hides when

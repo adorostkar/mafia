@@ -23,7 +23,7 @@ import {
 import { Emblem, Icon } from "./Art";
 import { GameTable } from "./GameTable";
 import { MatchReport, Reports } from "./Reports";
-import { Cast, Rulebook, type LearningSection } from "./Rulebook";
+import { FactionPreview, Rulebook, type LearningSection } from "./Rulebook";
 import { ErrorNotice } from "./ui";
 import { useGame } from "./useGame";
 import { useRemote } from "./useRemote";
@@ -287,13 +287,7 @@ function Home({
           </div>
         ))}
       </section>
-      <Cast t={t} compact />
-      <div className="library-callout">
-        <button className="secondary" onClick={learn}>
-          {t.text.characterLibrary}
-          <Icon name="arrow" />
-        </button>
-      </div>
+      <FactionPreview t={t} onLearn={learn} />
       {identity?.isGuest && (
         <section className="account-invite panel">
           <div>
