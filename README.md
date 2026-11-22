@@ -433,13 +433,18 @@ unless you intend to delete that database.
 
 `deploy/nginx.conf` is the site configuration for this domain. It redirects HTTP
 to HTTPS and forwards requests to `127.0.0.1:3001`. Buffering is off so night
-updates arrive immediately.
+updates arrive immediately. It also redirects HTTP visitors when Cloudflare uses
+HTTPS for its connection to the origin.
 
 This site uses the server's existing Cloudflare Origin CA certificate at
 `/etc/ssl/cert.pem` and key at `/etc/ssl/key.pem`. The certificate covers
 `*.dorostkar.net`. Keep the DNS record proxied through Cloudflare and use
 **Full (strict)** TLS there. Browsers do not trust this origin certificate when
 connecting directly to the server.
+
+Cloudflare can inject a bot-check script and set its own security cookie.
+The app sends a fresh CSP nonce with each response so Cloudflare can authorize
+its injected script without allowing arbitrary inline JavaScript.
 
 Set `PUBLIC_ORIGIN=https://mafia.dorostkar.net` in the server's private `.env`
 file. Set `TRUST_PROXY` to the app container network's gateway address, after

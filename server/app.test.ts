@@ -21,6 +21,15 @@ afterEach(() => {
   db.close();
 });
 
+it("issues a fresh CSP nonce without allowing arbitrary inline scripts", async () => {
+  const first = await request(backend.app).get("/healthz").expect(200);
+  const second = await request(backend.app).get("/healthz").expect(200);
+  const policy = first.headers["content-security-policy"];
+  expect(policy).toMatch(/script-src 'self' 'nonce-[A-Za-z0-9+/]+';/);
+  expect(policy).not.toContain("'unsafe-inline'");
+  expect(second.headers["content-security-policy"]).not.toBe(policy);
+});
+
 it("uses private cookie sessions and rejects cross-origin writes and strangers", async () => {
   const gm = request.agent(backend.app);
   const me = await gm.get("/api/me").expect(200);

@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { randomBytes } from "node:crypto";
 import express, { type ErrorRequestHandler, type Response } from "express";
 import { rateLimit } from "express-rate-limit";
 import { z } from "zod";
@@ -30,13 +31,13 @@ export function createApp(db: DatabaseSync, options: AppOptions = {}) {
   app.disable("x-powered-by");
   if (options.trustProxy?.length) app.set("trust proxy", options.trustProxy);
   app.use((_req, res, next) => {
+    const nonce = randomBytes(18).toString("base64");
     res.set({
       "X-Content-Type-Options": "nosniff",
       "Referrer-Policy": "no-referrer",
       "X-Frame-Options": "DENY",
       "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
-      "Content-Security-Policy":
-        "default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
+      "Content-Security-Policy": `default-src 'self'; script-src 'self' 'nonce-${nonce}'; style-src 'self'; font-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'`,
     });
     if (options.secureCookies)
       res.set("Strict-Transport-Security", "max-age=31536000");
