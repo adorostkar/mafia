@@ -15,6 +15,7 @@ import {
 
 export const playerStateSchema = z.object({
   left: z.boolean().default(false),
+  removed: z.boolean().default(false),
   revealed: z.boolean().default(false),
   vest: z.number().int().nonnegative().default(0),
   sniperShots: z.number().int().nonnegative().default(0),

@@ -33,6 +33,7 @@ export function useGame(code: string | null, identity: string | null) {
     let fetching = false;
     let again = false;
     let expired = false;
+    let loaded = false;
     const controller = new AbortController();
     const refresh = async () => {
       if (expired || !active) return;
@@ -48,10 +49,13 @@ export function useGame(code: string | null, identity: string | null) {
           controller.signal,
         );
         if (active && !expired) {
+          loaded = true;
           accept(next, identity);
           setConnection(streaming ? "live" : "polling");
           setError((previous) =>
-            previous === "network" || previous === "authentication"
+            previous === "network" ||
+            previous === "unsent" ||
+            previous === "authentication"
               ? null
               : previous,
           );
@@ -59,9 +63,15 @@ export function useGame(code: string | null, identity: string | null) {
       } catch (error) {
         if (active && !expired) {
           const failure = errorCode(error);
-          setError(failure);
+          // A failed background refresh is already shown as "reconnecting".
+          // The network warning is kept for choices that may not have arrived.
+          if (failure !== "network" || !loaded) setError(failure);
           setConnection("offline");
-          if (failure === "authentication" || failure === "forbidden") {
+          if (
+            failure === "authentication" ||
+            failure === "forbidden" ||
+            failure === "removed"
+          ) {
             expired = true;
             stream.close();
             setState(null);
@@ -81,7 +91,11 @@ export function useGame(code: string | null, identity: string | null) {
       streaming = true;
       void refresh();
     };
-    stream.addEventListener("update", () => void refresh());
+    stream.addEventListener("update", () => {
+      // A message proves the stream is alive, even after a short network drop.
+      streaming = true;
+      void refresh();
+    });
     stream.addEventListener("session", () => {
       expired = true;
       stream.close();
@@ -95,7 +109,10 @@ export function useGame(code: string | null, identity: string | null) {
         setConnection("offline");
       }
     };
-    const online = () => void refresh();
+    const online = () => {
+      streaming = stream.readyState === EventSource.OPEN;
+      void refresh();
+    };
     const offline = () => {
       streaming = false;
       setConnection("offline");
@@ -135,19 +152,27 @@ export function useGame(code: string | null, identity: string | null) {
     if (retry.current?.payload !== payload)
       retry.current = { payload, id: requestId() };
     try {
-      const next = await request<GameView>(`/games/${code}/commands`, {
-        command,
-        revision: game.revision,
-        requestId: retry.current.id,
-      });
-      if (generation.current === epoch) accept(next, identity);
+      const next = await request<GameView | { left: true }>(
+        `/games/${code}/commands`,
+        {
+          command,
+          revision: game.revision,
+          requestId: retry.current.id,
+        },
+      );
+      if (generation.current === epoch) {
+        // Leaving the lobby ends access to the table, so there is nothing to show.
+        if ("left" in next) setState(null);
+        else accept(next, identity);
+      }
       retry.current = null;
       return true;
     } catch (error) {
       const failure = errorCode(error);
       if (failure !== "network" && failure !== "server") retry.current = null;
       if (generation.current === epoch) {
-        setError(failure);
+        // Only a failed command can leave a choice in doubt.
+        setError(failure === "network" ? "unsent" : failure);
         await refreshRef.current();
       }
       return false;

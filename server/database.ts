@@ -248,6 +248,12 @@ export function openDatabase(path: string) {
         `);
       });
     }
+    // Lookups used by the hourly cleanup. Safe to repeat on every start.
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS events_actor ON events(actor_profile_id);
+      CREATE INDEX IF NOT EXISTS receipts_profile ON command_receipts(profile_id);
+      CREATE INDEX IF NOT EXISTS receipts_created ON command_receipts(created_at);
+    `);
     return db;
   } catch (error) {
     db.close();

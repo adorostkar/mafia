@@ -2,8 +2,10 @@ import { randomUUID } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
 import { z } from "zod";
 
+export type MailKind = "verification" | "reset";
 export interface MailMessage {
   id: string;
+  kind: MailKind;
   to: string;
   subject: string;
   text: string;
@@ -11,6 +13,53 @@ export interface MailMessage {
 }
 export interface Mailer {
   send(message: MailMessage): Promise<void>;
+}
+export class EmailBudgetError extends Error {
+  constructor() {
+    super("The daily email limit is reached.");
+  }
+}
+
+// Keeps the app below the provider's daily quota. Sign-up emails may use most of
+// the budget, but not all of it, so password resets still work when sign-up is flooded.
+export function limitDailyEmail(
+  mailer: Mailer,
+  dailyLimit: number,
+  now: () => number = Date.now,
+): Mailer {
+  const sent: { at: number; kind: MailKind }[] = [];
+  const verificationLimit = Math.max(1, Math.floor(dailyLimit * 0.7));
+  return {
+    async send(message) {
+      const cutoff = now() - 24 * 60 * 60_000;
+      while (sent.length && sent[0].at <= cutoff) sent.shift();
+      const verifications = sent.filter(
+        (entry) => entry.kind === "verification",
+      ).length;
+      if (
+        sent.length >= dailyLimit ||
+        (message.kind === "verification" && verifications >= verificationLimit)
+      )
+        throw new EmailBudgetError();
+      const entry = { at: now(), kind: message.kind };
+      sent.push(entry);
+      try {
+        await mailer.send(message);
+      } catch (error) {
+        sent.splice(sent.indexOf(entry), 1);
+        throw error;
+      }
+    },
+  };
+}
+
+export function emailDailyLimit(value: string | undefined): number {
+  const text = value?.trim();
+  if (!text) return 90;
+  const limit = Number(text);
+  if (!Number.isInteger(limit) || limit < 1)
+    throw new Error("EMAIL_DAILY_LIMIT must be a whole number of at least 1.");
+  return limit;
 }
 
 export const emailSchema = z
@@ -131,6 +180,7 @@ export function accountEmail(
       : `<p><a href="${escapeHtml(value)}" style="display:inline-block;padding:16px 24px;background:#f5d891;color:#0c1713;border-radius:8px">${escapeHtml(mail.resetAction)}</a></p>`;
   return {
     id: randomUUID(),
+    kind,
     to,
     subject,
     text: [intro, value, expiry, mail.ignore, mail.footer].join("\n\n"),

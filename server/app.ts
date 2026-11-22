@@ -1,7 +1,11 @@
 import type { DatabaseSync } from "node:sqlite";
 import { randomBytes } from "node:crypto";
-import express, { type ErrorRequestHandler, type Response } from "express";
-import { rateLimit } from "express-rate-limit";
+import express, {
+  type ErrorRequestHandler,
+  type Request,
+  type Response,
+} from "express";
+import { ipKeyGenerator, rateLimit } from "express-rate-limit";
 import { z } from "zod";
 import {
   AuthStore,
@@ -22,6 +26,8 @@ interface AppOptions {
   publicOrigin?: string;
   trustProxy?: string[];
   email?: Mailer;
+  // Receives one line for each write request and each failed request.
+  log?: (line: string) => void;
 }
 export function createApp(db: DatabaseSync, options: AppOptions = {}) {
   if (options.email && !options.publicOrigin)
@@ -35,7 +41,7 @@ export function createApp(db: DatabaseSync, options: AppOptions = {}) {
   >();
   app.disable("x-powered-by");
   if (options.trustProxy?.length) app.set("trust proxy", options.trustProxy);
-  app.use((_req, res, next) => {
+  app.use((req, res, next) => {
     const nonce = randomBytes(18).toString("base64");
     res.set({
       "X-Content-Type-Options": "nosniff",
@@ -46,6 +52,24 @@ export function createApp(db: DatabaseSync, options: AppOptions = {}) {
     });
     if (options.secureCookies)
       res.set("Strict-Transport-Security", "max-age=31536000");
+    if (options.log) {
+      const log = options.log;
+      const started = performance.now();
+      res.on("finish", () => {
+        // Reads that work, and the normal "not signed in" or "not a member" answers, stay quiet.
+        const quiet =
+          req.method === "GET" &&
+          (res.statusCode < 400 || [401, 403, 404].includes(res.statusCode));
+        if (quiet || !req.originalUrl.startsWith("/api/")) return;
+        const path = req.originalUrl
+          .split("?")[0]
+          .replace(/\/games\/[A-Za-z0-9]{6}/, "/games/:code");
+        const error = res.locals.errorCode ? ` ${res.locals.errorCode}` : "";
+        log(
+          `${req.method} ${path} ${res.statusCode} ${Math.round(performance.now() - started)}ms${error}`,
+        );
+      });
+    }
     next();
   });
   app.get("/healthz", (_req, res) => {
@@ -86,33 +110,62 @@ export function createApp(db: DatabaseSync, options: AppOptions = {}) {
       .map((part) => part.trim())
       .find((part) => part.startsWith("mafia_session="))
       ?.slice(14);
+  const setCookie = (res: Response, token: string, maxAge: number) =>
+    res.cookie("mafia_session", token, {
+      httpOnly: true,
+      sameSite: "strict",
+      secure: options.secureCookies ?? false,
+      maxAge,
+      path: "/",
+    });
   const setSession = (
     res: Response,
     value: { token: string; maxAge: number; session: AuthSession },
   ) => {
-    res.cookie("mafia_session", value.token, {
-      httpOnly: true,
-      sameSite: "strict",
-      secure: options.secureCookies ?? false,
-      maxAge: value.maxAge,
-      path: "/",
-    });
+    setCookie(res, value.token, value.maxAge);
     return auth.identity(value.session);
   };
+  // Finds the session of a request and keeps a session that is in use alive.
+  const currentSession = (req: Request, res: Response) => {
+    const token = cookieToken(req.headers.cookie);
+    const found = auth.session(token);
+    if (found && token) {
+      const maxAge = auth.renew(found);
+      if (maxAge) setCookie(res, token, maxAge);
+    }
+    return found;
+  };
+  // Only the app's own script may start a new guest. A link or redirect from
+  // another website must never replace the visitor's session cookie.
+  const fromApp = (req: Request) =>
+    req.get("X-Mafia-Client") === "1" &&
+    req.get("Sec-Fetch-Site") !== "cross-site" &&
+    req.get("Sec-Fetch-Mode") !== "navigate";
+  const guestLimit = rateLimit({
+    windowMs: 60 * 60_000,
+    limit: 120,
+    message: { error: "rateLimit" },
+  });
   app.get(
     "/api/me",
     rateLimit({ windowMs: 60_000, limit: 90, message: { error: "rateLimit" } }),
-    (req, res) => {
-      const session = auth.session(cookieToken(req.headers.cookie));
-      res.json(
-        session ? auth.identity(session) : setSession(res, auth.guest()),
-      );
+    (req, res, next) => {
+      const found = currentSession(req, res);
+      if (found) {
+        res.json(auth.identity(found));
+        return;
+      }
+      if (!fromApp(req)) throw new GameError("authentication", 401);
+      void guestLimit(req, res, (error?: unknown) => {
+        if (error) next(error);
+        else res.json(setSession(res, auth.guest()));
+      });
     },
   );
   app.use("/api", (req, res, next) => {
-    const session = auth.session(cookieToken(req.headers.cookie));
-    if (!session) throw new GameError("authentication", 401);
-    res.locals.session = session;
+    const found = currentSession(req, res);
+    if (!found) throw new GameError("authentication", 401);
+    res.locals.session = found;
     next();
   });
   const session = (res: Response) => sessionSchema.parse(res.locals.session);
@@ -126,24 +179,41 @@ export function createApp(db: DatabaseSync, options: AppOptions = {}) {
         client.response.end();
     }
   };
-  const notifyAll = () => {
-    for (const code of streams.keys()) notify(code);
+  // Tells only the tables of these profiles that something about a member changed.
+  const notifyProfiles = (...profiles: string[]) => {
+    const codes = new Set(profiles.flatMap((id) => store.codesFor(id)));
+    for (const code of codes) if (streams.has(code)) notify(code);
   };
   const accountIpLimit = rateLimit({
     windowMs: 15 * 60_000,
     limit: 90,
     message: { error: "rateLimit" },
   });
-  const accountNameLimit = rateLimit({
-    windowMs: 15 * 60_000,
-    limit: 12,
-    keyGenerator: (req) =>
-      hashToken(
-        loginSchema.shape.username.safeParse(req.body?.username).data ??
-          "invalid-username",
-      ),
-    message: { error: "rateLimit" },
-  });
+  const usernameKey = (req: Request) =>
+    hashToken(
+      loginSchema.shape.username.safeParse(req.body?.username).data ??
+        "invalid-username",
+    );
+  // Wrong guesses are counted per username and address together, so a stranger
+  // cannot lock the real owner out. A much higher limit per username alone
+  // still slows down guessing from many addresses.
+  const accountNameLimit = [
+    rateLimit({
+      windowMs: 15 * 60_000,
+      limit: 200,
+      skipSuccessfulRequests: true,
+      keyGenerator: usernameKey,
+      message: { error: "rateLimit" },
+    }),
+    rateLimit({
+      windowMs: 15 * 60_000,
+      limit: 12,
+      skipSuccessfulRequests: true,
+      keyGenerator: (req) =>
+        `${usernameKey(req)}:${ipKeyGenerator(req.ip ?? "")}`,
+      message: { error: "rateLimit" },
+    }),
+  ];
   app.use("/api/auth", accountIpLimit);
   app.use(
     "/api/account",
@@ -172,9 +242,17 @@ export function createApp(db: DatabaseSync, options: AppOptions = {}) {
       ),
     message: { error: "rateLimit" },
   });
+  // One address may only cause a few emails per hour, whoever they are sent to.
+  const emailIpLimit = rateLimit({
+    windowMs: 60 * 60_000,
+    limit: 20,
+    skip: () => !options.email,
+    message: { error: "rateLimit" },
+  });
   app.post(
     "/api/auth/register",
-    accountNameLimit,
+    ...accountNameLimit,
+    emailIpLimit,
     emailLimit,
     async (req, res) => {
       const { username, password } = newCredentials.parse(req.body);
@@ -196,7 +274,7 @@ export function createApp(db: DatabaseSync, options: AppOptions = {}) {
         return;
       }
       const result = await auth.register(session(res), username, password);
-      notifyAll();
+      notifyProfiles(result.session.profileId);
       res.status(201).json({
         identity: setSession(res, result),
         recoveryCode: result.recoveryCode,
@@ -215,17 +293,22 @@ export function createApp(db: DatabaseSync, options: AppOptions = {}) {
       })
       .parse(req.body);
     const result = auth.verifyEmail(session(res), code);
-    notifyAll();
+    notifyProfiles(result.session.profileId);
     res.status(201).json({ identity: setSession(res, result) });
   });
-  app.post("/api/auth/resend-verification", emailLimit, async (req, res) => {
-    const { language } = z
-      .object({ language: z.string().max(35).default("en") })
-      .parse(req.body);
-    await auth.resendVerification(session(res), language);
-    res.status(202).json({ identity: auth.identity(session(res)) });
-  });
-  app.post("/api/auth/request-reset", emailLimit, (req, res) => {
+  app.post(
+    "/api/auth/resend-verification",
+    emailIpLimit,
+    emailLimit,
+    async (req, res) => {
+      const { language } = z
+        .object({ language: z.string().max(35).default("en") })
+        .parse(req.body);
+      await auth.resendVerification(session(res), language);
+      res.status(202).json({ identity: auth.identity(session(res)) });
+    },
+  );
+  app.post("/api/auth/request-reset", emailIpLimit, emailLimit, (req, res) => {
     if (!options.email || !options.publicOrigin)
       throw new GameError("notFound", 404);
     const { email, language } = z
@@ -253,30 +336,27 @@ export function createApp(db: DatabaseSync, options: AppOptions = {}) {
       .refine((value) => value.password === value.confirmPassword)
       .parse(req.body);
     const current = session(res);
-    await auth.resetPassword(token, password);
+    const changed = await auth.resetPassword(token, password);
     const identity = auth.isValid(current)
       ? auth.identity(current)
       : setSession(res, auth.guest());
-    notifyAll();
+    notifyProfiles(changed, current.profileId);
     res.json({ identity });
   });
-  app.post("/api/auth/login", accountNameLimit, async (req, res) => {
+  app.post("/api/auth/login", ...accountNameLimit, async (req, res) => {
     const { username, password, adoptGuest } = loginSchema.parse(req.body);
-    const result = await auth.login(
-      session(res),
-      username,
-      password,
-      adoptGuest,
-    );
-    notifyAll();
+    const previous = session(res);
+    const result = await auth.login(previous, username, password, adoptGuest);
+    notifyProfiles(result.session.profileId, previous.profileId);
     res.json({ identity: setSession(res, result) });
   });
   app.post("/api/auth/logout", (_req, res) => {
-    const result = auth.logout(session(res));
-    notifyAll();
+    const previous = session(res);
+    const result = auth.logout(previous);
+    notifyProfiles(previous.profileId);
     res.json({ identity: setSession(res, result) });
   });
-  app.post("/api/auth/recover", accountNameLimit, async (req, res) => {
+  app.post("/api/auth/recover", ...accountNameLimit, async (req, res) => {
     const { username, code, password } = newCredentials
       .safeExtend({
         code: z
@@ -290,7 +370,7 @@ export function createApp(db: DatabaseSync, options: AppOptions = {}) {
     const identity = auth.isValid(current)
       ? auth.identity(current)
       : setSession(res, auth.guest());
-    notifyAll();
+    notifyProfiles(result.profileId, current.profileId);
     res.json({ identity, recoveryCode: result.recoveryCode });
   });
   app.post("/api/account/password", async (req, res) => {
@@ -307,7 +387,7 @@ export function createApp(db: DatabaseSync, options: AppOptions = {}) {
       body.currentPassword,
       body.password,
     );
-    notifyAll();
+    notifyProfiles(result.session.profileId);
     res.json({ identity: setSession(res, result) });
   });
   app.post("/api/account/recovery", async (req, res) => {
@@ -315,7 +395,7 @@ export function createApp(db: DatabaseSync, options: AppOptions = {}) {
       .object({ password: z.string().min(1).max(128) })
       .parse(req.body);
     const result = await auth.rotateRecovery(session(res), password);
-    notifyAll();
+    notifyProfiles(result.session.profileId);
     res.json({
       identity: setSession(res, result),
       recoveryCode: result.recoveryCode,
@@ -327,7 +407,7 @@ export function createApp(db: DatabaseSync, options: AppOptions = {}) {
   app.post("/api/account/sessions/revoke", (req, res) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.body);
     auth.revoke(session(res), id);
-    notifyAll();
+    notifyProfiles(profile(res));
     res.json({ ok: true });
   });
   app.get("/api/account/export", (_req, res) => {
@@ -350,14 +430,21 @@ export function createApp(db: DatabaseSync, options: AppOptions = {}) {
         password: z.string().max(128).optional(),
       })
       .parse(req.body);
-    const result = await auth.deleteProfile(session(res), password);
-    notifyAll();
+    const current = session(res);
+    // Look the tables up first: deleting moves them to an anonymous profile.
+    const codes = store.codesFor(current.profileId);
+    const result = await auth.deleteProfile(current, password);
+    for (const code of codes) if (streams.has(code)) notify(code);
     res.json({ identity: setSession(res, result) });
   });
   app.get("/api/games", (_req, res) => res.json(store.list(profile(res))));
   app.post(
     "/api/games",
-    rateLimit({ windowMs: 60_000, limit: 30, message: { error: "rateLimit" } }),
+    rateLimit({
+      windowMs: 60 * 60_000,
+      limit: 40,
+      message: { error: "rateLimit" },
+    }),
     (_req, res) => {
       res.status(201).json({ code: store.create(profile(res)) });
     },
@@ -394,7 +481,18 @@ export function createApp(db: DatabaseSync, options: AppOptions = {}) {
       .parse(req.body);
     store.command(code, profile(res), command, revision, requestId);
     notify(code);
-    res.json(store.view(code, profile(res)));
+    try {
+      res.json(store.view(code, profile(res)));
+    } catch (error) {
+      // Leaving the lobby ends the player's access, so there is no table to show.
+      if (
+        command.type === "leave" &&
+        error instanceof GameError &&
+        error.code === "forbidden"
+      )
+        res.json({ left: true });
+      else throw error;
+    }
   });
   app.get("/api/games/:code/report", (req, res) =>
     res.json(store.report(codeSchema.parse(req.params.code), profile(res))),
@@ -451,6 +549,7 @@ export function createApp(db: DatabaseSync, options: AppOptions = {}) {
       return;
     }
     if (error instanceof GameError) {
+      res.locals.errorCode = error.code;
       res.status(error.status).json({ error: error.code });
       return;
     }
@@ -476,7 +575,14 @@ export function createApp(db: DatabaseSync, options: AppOptions = {}) {
   app.use(errors);
   return {
     app,
-    maintenance: () => auth.pruneExpiredSessions(),
+    // Hourly cleanup. Returns what was removed so the host can see it in the log.
+    maintenance(now = Date.now()) {
+      auth.pruneExpiredSessions();
+      const tables = store.prune(now);
+      for (const code of tables) notify(code);
+      const guests = auth.pruneIdleGuests(now);
+      return { tables: tables.length, guests };
+    },
     closeStreams() {
       for (const clients of streams.values())
         for (const { response } of clients) response.end();

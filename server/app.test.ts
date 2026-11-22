@@ -32,7 +32,7 @@ it("issues a fresh CSP nonce without allowing arbitrary inline scripts", async (
 
 it("uses private cookie sessions and rejects cross-origin writes and strangers", async () => {
   const gm = request.agent(backend.app);
-  const me = await gm.get("/api/me").expect(200);
+  const me = await gm.get("/api/me").set("X-Mafia-Client", "1").expect(200);
   expect(me.headers["set-cookie"][0]).toContain("HttpOnly");
   expect(me.headers["set-cookie"][0]).toContain("SameSite=Strict");
   expect((await gm.get("/api/me")).body.id).toBe(me.body.id);
@@ -49,7 +49,7 @@ it("uses private cookie sessions and rejects cross-origin writes and strangers",
     .send({})
     .expect(201);
   const stranger = request.agent(backend.app);
-  await stranger.get("/api/me");
+  await stranger.get("/api/me").set("X-Mafia-Client", "1");
   await stranger.get(`/api/games/${body.code}`).expect(403);
   await stranger.get(`/api/games/${body.code}/events`).expect(403);
   await stranger
@@ -69,7 +69,7 @@ it("uses private cookie sessions and rejects cross-origin writes and strangers",
 
 it("completes a multiplayer match through HTTP with private night choices and saved statistics", async () => {
   const gm = request.agent(backend.app);
-  await gm.get("/api/me").expect(200);
+  await gm.get("/api/me").set("X-Mafia-Client", "1").expect(200);
   const created = await gm
     .post("/api/games")
     .set("X-Mafia-Client", "1")
@@ -89,7 +89,7 @@ it("completes a multiplayer match through HTTP with private night choices and sa
   };
   const clients = Array.from({ length: 7 }, () => request.agent(backend.app));
   for (const [index, client] of clients.entries()) {
-    await client.get("/api/me").expect(200);
+    await client.get("/api/me").set("X-Mafia-Client", "1").expect(200);
     await client
       .post(`${path}/join`)
       .set("X-Mafia-Client", "1")
@@ -225,7 +225,7 @@ it("completes a multiplayer match through HTTP with private night choices and sa
     roleHistory: { sniper: 1 },
   });
   const stranger = request.agent(backend.app);
-  await stranger.get("/api/me").expect(200);
+  await stranger.get("/api/me").set("X-Mafia-Client", "1").expect(200);
   await stranger.get(`${path}/report`).expect(403);
 });
 
@@ -238,7 +238,9 @@ it("streams invalidations without private payloads and catches up on reconnect",
   const base = `http://127.0.0.1:${address.port}`;
   const abort = new AbortController();
   try {
-    const me = await fetch(`${base}/api/me`);
+    const me = await fetch(`${base}/api/me`, {
+      headers: { "X-Mafia-Client": "1" },
+    });
     const cookie = me.headers.get("set-cookie")!.split(";")[0];
     const created = await fetch(`${base}/api/games`, {
       method: "POST",
@@ -260,7 +262,9 @@ it("streams invalidations without private payloads and catches up on reconnect",
     expect(new TextDecoder().decode(first.value)).toContain(
       "event: update\ndata: {}",
     );
-    const otherMe = await fetch(`${base}/api/me`);
+    const otherMe = await fetch(`${base}/api/me`, {
+      headers: { "X-Mafia-Client": "1" },
+    });
     const otherCookie = otherMe.headers.get("set-cookie")!.split(";")[0];
     await fetch(`${base}/api/games/${code}/join`, {
       method: "POST",
@@ -308,7 +312,7 @@ it("streams invalidations without private payloads and catches up on reconnect",
 
 it("limits repeated join-code guesses before looking up the game", async () => {
   const client = request.agent(backend.app);
-  await client.get("/api/me").expect(200);
+  await client.get("/api/me").set("X-Mafia-Client", "1").expect(200);
   for (let attempt = 0; attempt < 90; attempt++) {
     await client
       .post("/api/games/AAAAAA/join")
@@ -322,4 +326,101 @@ it("limits repeated join-code guesses before looking up the game", async () => {
     .send({ name: "Guest" })
     .expect(429);
   expect(limited.body.error).toBe("rateLimit");
+});
+
+it("starts a guest only for the app's own request, never for a link from another site", async () => {
+  const profiles = () =>
+    db.prepare("SELECT COUNT(*) AS n FROM profiles").get()!.n;
+  const plain = await request(backend.app).get("/api/me").expect(401);
+  expect(plain.headers["set-cookie"]).toBeUndefined();
+  for (const [header, value] of [
+    ["Sec-Fetch-Site", "cross-site"],
+    ["Sec-Fetch-Mode", "navigate"],
+  ]) {
+    const link = await request(backend.app)
+      .get("/api/me")
+      .set("X-Mafia-Client", "1")
+      .set(header, value)
+      .expect(401);
+    expect(link.headers["set-cookie"]).toBeUndefined();
+  }
+  expect(profiles()).toBe(0);
+  const client = request.agent(backend.app);
+  const me = await client.get("/api/me").set("X-Mafia-Client", "1").expect(200);
+  // A visitor who already has a session keeps it, however the request arrives.
+  const again = await client
+    .get("/api/me")
+    .set("Sec-Fetch-Site", "cross-site")
+    .set("Sec-Fetch-Mode", "navigate")
+    .expect(200);
+  expect(again.body.id).toBe(me.body.id);
+  expect(again.headers["set-cookie"]).toBeUndefined();
+  expect(profiles()).toBe(1);
+});
+
+it("ends a lobby leaver's access and tells a removed player why", async () => {
+  const seat = async () => {
+    const client = request.agent(backend.app);
+    await client.get("/api/me").set("X-Mafia-Client", "1").expect(200);
+    return client;
+  };
+  const gm = await seat();
+  const { code } = (
+    await gm.post("/api/games").set("X-Mafia-Client", "1").send({}).expect(201)
+  ).body;
+  const path = `/api/games/${code}`;
+  const join = (client: Awaited<ReturnType<typeof seat>>, name: string) =>
+    client.post(`${path}/join`).set("X-Mafia-Client", "1").send({ name });
+  const send = async (
+    client: Awaited<ReturnType<typeof seat>>,
+    command: Command,
+  ) =>
+    client
+      .post(`${path}/commands`)
+      .set("X-Mafia-Client", "1")
+      .send({
+        command,
+        revision: (await gm.get(path)).body.revision,
+        requestId: randomUUID(),
+      })
+      .expect(200);
+  const leaver = await seat();
+  const removed = await seat();
+  await join(leaver, "Leaver").expect(200);
+  const table: GameView = (await join(removed, "Removed").expect(200)).body;
+  expect((await send(leaver, { type: "leave" })).body).toEqual({ left: true });
+  expect((await leaver.get(path).expect(403)).body.error).toBe("forbidden");
+  await leaver.get(`${path}/events`).expect(403);
+  await send(gm, { type: "remove", playerId: table.selfId! });
+  expect((await removed.get(path).expect(403)).body.error).toBe("removed");
+  expect((await join(removed, "Again").expect(403)).body.error).toBe("removed");
+  expect((await gm.get(path)).body.players).toEqual([]);
+  await join(leaver, "Leaver").expect(200);
+});
+
+it("logs writes and failures without join codes or request details", async () => {
+  const lines: string[] = [];
+  backend = createApp(db, { log: (line) => lines.push(line) });
+  const client = request.agent(backend.app);
+  await client.get("/api/me").set("X-Mafia-Client", "1").expect(200);
+  const { code } = (
+    await client
+      .post("/api/games")
+      .set("X-Mafia-Client", "1")
+      .send({})
+      .expect(201)
+  ).body;
+  await client.get(`/api/games/${code}?probe=1`).expect(200);
+  await request(backend.app).get("/api/games").expect(401);
+  await client
+    .post(`/api/games/${code}/commands`)
+    .set("X-Mafia-Client", "1")
+    .send({ command: { type: "start" }, revision: 0, requestId: randomUUID() })
+    .expect(400);
+  await new Promise((resolve) => setImmediate(resolve));
+  expect(lines).toHaveLength(2);
+  expect(lines[0]).toMatch(/^POST \/api\/games 201 \d+ms$/);
+  expect(lines[1]).toMatch(
+    /^POST \/api\/games\/:code\/commands 400 \d+ms counts$/,
+  );
 });

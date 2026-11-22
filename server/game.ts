@@ -8,9 +8,11 @@ import {
   type GameSummary,
   type GameView,
   type MatchSummary,
+  type PublicEvent,
   type Report,
   type ReportsView,
 } from "../shared/game.js";
+import { nameKey } from "../shared/input.js";
 import { transaction } from "./database.js";
 import { GameError } from "./errors.js";
 import {
@@ -27,6 +29,8 @@ import {
   eligibleActors,
   eligibleTargets,
   factionOf,
+  finishGame,
+  isMember,
   isPlayerCommand,
   missingActors,
   publish,
@@ -52,14 +56,44 @@ const actionView = (a: ActionView): ActionView => ({
   gun: a.gun,
 });
 
+const lobbyEvents = new Set<PublicEvent["kind"]>(["joined", "left", "removed"]);
+const staleLobby = 7 * 24 * 60 * 60_000;
+const staleGame = 30 * 24 * 60 * 60_000;
+const receiptLifetime = 24 * 60 * 60_000;
+// The columns that save() may change after a row exists.
+const playerRow = (p: Player) =>
+  JSON.stringify([
+    p.name,
+    p.role,
+    p.originalRole,
+    p.alive,
+    p.firstDay,
+    p.state,
+    p.result,
+  ]);
+interface Snapshot {
+  rows: Map<string, string>;
+  notices: number;
+  events: number;
+}
+function snapshotOf(game: Game): Snapshot {
+  const rows = new Map<string, string>();
+  for (const p of game.players) rows.set(`p:${p.id}`, playerRow(p));
+  for (const a of game.actions) rows.set(`a:${a.id}`, a.outcome);
+  for (const v of game.votes)
+    rows.set(`v:${v.ballotId}:${v.voterId}`, String(v.targetId));
+  return { rows, notices: game.notices.length, events: game.events.length };
+}
+
 export class GameStore {
+  private snapshots = new WeakMap<Game, Snapshot>();
   constructor(private db: DatabaseSync) {}
 
   private load(code: string): Game {
     const row = this.db.prepare("SELECT * FROM games WHERE code = ?").get(code);
     if (!row) throw new GameError("notFound", 404);
     const g = gameRowSchema.parse(row);
-    return {
+    const game: Game = {
       id: g.id,
       code: g.code,
       gmId: g.gm_id,
@@ -143,6 +177,8 @@ export class GameStore {
         .all(g.id)
         .map((r) => publicEventSchema.parse(JSON.parse(String(r.data)))),
     };
+    this.snapshots.set(game, snapshotOf(game));
+    return game;
   }
   private save(game: Game) {
     this.db
@@ -166,7 +202,11 @@ export class GameStore {
       .prepare(`INSERT INTO players(id,game_id,profile_id,name,role,original_role,alive,first_day,joined_at,state,result)
       VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,role=excluded.role,
       original_role=excluded.original_role,alive=excluded.alive,first_day=excluded.first_day,state=excluded.state,result=excluded.result`);
-    for (const p of game.players)
+    const saved = this.snapshots.get(game);
+    const unchanged = (key: string, value: string) =>
+      saved?.rows.get(key) === value;
+    for (const p of game.players) {
+      if (unchanged(`p:${p.id}`, playerRow(p))) continue;
       player.run(
         p.id,
         game.id,
@@ -180,10 +220,12 @@ export class GameStore {
         JSON.stringify(p.state),
         p.result,
       );
+    }
     const action = this.db
       .prepare(`INSERT INTO actions(id,game_id,actor_id,targets,night_window,day,outcome,guess,gun,created_at)
       VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET outcome=excluded.outcome`);
-    for (const a of game.actions)
+    for (const a of game.actions) {
+      if (unchanged(`a:${a.id}`, a.outcome)) continue;
       action.run(
         a.id,
         game.id,
@@ -196,26 +238,44 @@ export class GameStore {
         a.gun,
         a.createdAt,
       );
+    }
     const vote = this.db
       .prepare(`INSERT INTO votes(game_id,ballot_id,day,round,voter_id,target_id) VALUES (?,?,?,?,?,?)
       ON CONFLICT(ballot_id,voter_id) DO UPDATE SET target_id=excluded.target_id`);
-    for (const v of game.votes)
+    for (const v of game.votes) {
+      if (unchanged(`v:${v.ballotId}:${v.voterId}`, String(v.targetId)))
+        continue;
       vote.run(game.id, v.ballotId, v.day, v.round, v.voterId, v.targetId);
+    }
     const notice = this.db.prepare(
       "INSERT OR IGNORE INTO private_notices(id,game_id,player_id,data) VALUES (?,?,?,?)",
     );
-    for (const n of game.notices)
+    // Notices and public events are only ever added.
+    for (const n of game.notices.slice(saved?.notices ?? 0))
       notice.run(n.id, game.id, n.playerId, JSON.stringify(n));
     const event = this.db.prepare(
       "INSERT OR IGNORE INTO public_events(id,game_id,data) VALUES (?,?,?)",
     );
-    for (const e of game.events) event.run(e.id, game.id, JSON.stringify(e));
+    for (const e of game.events.slice(saved?.events ?? 0))
+      event.run(e.id, game.id, JSON.stringify(e));
+    this.snapshots.set(game, snapshotOf(game));
   }
   private authorize(game: Game, profileId: string) {
-    const self = game.players.find((p) => p.profileId === profileId);
+    const seat = game.players.find((p) => p.profileId === profileId);
+    const self = seat && isMember(seat) ? seat : undefined;
     const isGm = game.gmId === profileId;
-    if (!self && !isGm) throw new GameError("forbidden", 403);
+    if (!self && !isGm)
+      throw new GameError(seat?.state.removed ? "removed" : "forbidden", 403);
     return { self, isGm };
+  }
+  // Joining and leaving the lobby is only shown for people who are still at the table.
+  private publicEvents(game: Game) {
+    const members = new Set(game.players.filter(isMember).map((p) => p.id));
+    return game.events.filter(
+      (event) =>
+        !lobbyEvents.has(event.kind) ||
+        event.playerIds.every((id) => members.has(id)),
+    );
   }
   create(profile: string): string {
     return transaction(this.db, () => {
@@ -260,14 +320,11 @@ export class GameStore {
       if (game.gmId === profile) return;
       const existing = game.players.find((p) => p.profileId === profile);
       if (existing && !existing.state.left) return;
+      if (existing?.state.removed) throw new GameError("removed", 403);
       if (game.phase !== "lobby") throw new GameError("closed");
       const active = game.players.filter((p) => !p.state.left);
       if (active.length >= 30) throw new GameError("full");
-      if (
-        active.some(
-          (p) => p.name.toLocaleLowerCase() === name.toLocaleLowerCase(),
-        )
-      )
+      if (active.some((p) => nameKey(p.name) === nameKey(name)))
         throw new GameError("duplicateName");
       if (existing) {
         existing.name = name;
@@ -312,6 +369,8 @@ export class GameStore {
       : [];
     const myVote = votes.find((v) => v.voterId === self?.id);
     const mafiaAwake = awake && window === "mafia";
+    // Players only learn about a night step while it is their own turn.
+    const shownWindow = isGm || awake ? window : null;
     const accountPlayers = new Set(
       this.db
         .prepare(
@@ -329,34 +388,34 @@ export class GameStore {
       phase: game.phase,
       day: game.day,
       counts: isGm ? game.counts : null,
-      players: game.players
-        .filter((p) => game.phase !== "lobby" || !p.state.left)
-        .map((p) => {
-          const reveal =
-            isGm ||
-            p.id === self?.id ||
-            p.state.revealed ||
-            game.phase === "finished";
-          return {
-            id: p.id,
-            name: p.name,
-            isGuest: !accountPlayers.has(p.id),
-            alive: p.alive,
-            role: reveal ? p.role : null,
-            originalRole: reveal ? p.originalRole : null,
-            left: p.state.left,
-            revealed: p.state.revealed,
-          };
-        }),
-      window,
+      players: game.players.filter(isMember).map((p) => {
+        const reveal =
+          isGm ||
+          p.id === self?.id ||
+          p.state.revealed ||
+          game.phase === "finished";
+        return {
+          id: p.id,
+          name: p.name,
+          isGuest: !accountPlayers.has(p.id),
+          alive: p.alive,
+          role: reveal ? p.role : null,
+          originalRole: reveal ? p.originalRole : null,
+          left: p.state.left,
+          revealed: p.state.revealed,
+        };
+      }),
+      window: shownWindow,
       canAct: !!awake && !submitted,
       eligibleTargetIds: targets.map((p) => p.id),
-      neededTargets: window === "nostradamus" ? 3 : game.day === 0 ? 0 : 1,
+      neededTargets: shownWindow === "nostradamus" ? 3 : game.day === 0 ? 0 : 1,
       missingActorIds: isGm ? missingActors(game).map((p) => p.id) : [],
-      nightProgress: {
-        current: game.data.nightIndex + 1,
-        total: game.data.nightOrder.length,
-      },
+      nightProgress: isGm
+        ? {
+            current: game.data.nightIndex + 1,
+            total: game.data.nightOrder.length,
+          }
+        : { current: 0, total: 0 },
       submitted: submitted ? actionView(submitted) : null,
       actions: isGm ? game.actions.map(actionView) : [],
       teammates: mafiaAwake
@@ -413,7 +472,12 @@ export class GameStore {
           targetIds,
           value,
         })),
-      events: game.events.slice(-40),
+      events: this.publicEvents(game)
+        .filter(
+          (event) =>
+            isGm || game.phase === "finished" || event.kind !== "awake",
+        )
+        .slice(-40),
     };
   }
   command(
@@ -514,6 +578,7 @@ export class GameStore {
         `SELECT g.*,p.original_role AS own_role,p.result AS own_result,
       (SELECT COUNT(*) FROM players WHERE game_id=g.id AND role IS NOT NULL) AS player_count
       FROM games g LEFT JOIN players p ON p.game_id=g.id AND p.profile_id=?
+        AND (p.role IS NOT NULL OR json_extract(p.state,'$.left')=0)
       WHERE g.phase='finished' AND (g.gm_id=? OR p.id IS NOT NULL)
       ORDER BY g.finished_at DESC,g.id LIMIT 21 OFFSET ?`,
       )
@@ -563,7 +628,7 @@ export class GameStore {
           alignment: p.state.alignment,
         })),
       actions: game.actions.map(actionView),
-      events: game.events,
+      events: this.publicEvents(game),
       votes: game.votes.map(({ day, round, voterId, targetId }) => ({
         day,
         round,
@@ -576,7 +641,8 @@ export class GameStore {
     const games = this.db
       .prepare(
         `SELECT code FROM games WHERE gm_id=? OR id IN
-      (SELECT game_id FROM players WHERE profile_id=?) ORDER BY created_at`,
+      (SELECT game_id FROM players WHERE profile_id=?
+        AND (role IS NOT NULL OR json_extract(state,'$.left')=0)) ORDER BY created_at`,
       )
       .all(profile, profile);
     return games.map((row) => {
@@ -590,6 +656,59 @@ export class GameStore {
           .filter((a) => a.actorId === self?.id)
           .map(actionView),
       };
+    });
+  }
+  // Every table this profile hosts or sits at. Used to tell only those tables about a change.
+  codesFor(profile: string): string[] {
+    return this.db
+      .prepare(
+        `SELECT code FROM games WHERE gm_id=? OR id IN
+      (SELECT game_id FROM players WHERE profile_id=?)`,
+      )
+      .all(profile, profile)
+      .map((row) => String(row.code));
+  }
+  // Removes lobbies nobody used for a week, ends matches that stood still for a month,
+  // and drops old retry receipts. Returns the codes of the tables that changed.
+  prune(now = Date.now()): string[] {
+    const lastActivity = `max(g.created_at,
+      COALESCE((SELECT MAX(created_at) FROM events WHERE game_id=g.id),0),
+      COALESCE((SELECT MAX(joined_at) FROM players WHERE game_id=g.id),0))`;
+    return transaction(this.db, () => {
+      const changed: string[] = [];
+      for (const row of this.db
+        .prepare(
+          `SELECT g.id,g.code FROM games g WHERE g.phase='lobby' AND ${lastActivity} < ?`,
+        )
+        .all(now - staleLobby)) {
+        for (const table of [
+          "command_receipts",
+          "events",
+          "public_events",
+          "private_notices",
+          "votes",
+          "actions",
+          "players",
+        ])
+          this.db.prepare(`DELETE FROM ${table} WHERE game_id=?`).run(row.id);
+        this.db.prepare("DELETE FROM games WHERE id=?").run(row.id);
+        changed.push(String(row.code));
+      }
+      for (const row of this.db
+        .prepare(
+          `SELECT g.code FROM games g WHERE g.phase NOT IN ('lobby','finished') AND ${lastActivity} < ?`,
+        )
+        .all(now - staleGame)) {
+        const game = this.load(String(row.code));
+        finishGame(game, "cancelled", now);
+        game.revision++;
+        this.save(game);
+        changed.push(game.code);
+      }
+      this.db
+        .prepare("DELETE FROM command_receipts WHERE created_at < ?")
+        .run(now - receiptLifetime);
+      return changed;
     });
   }
 }

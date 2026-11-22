@@ -19,7 +19,9 @@ afterEach(() => {
 });
 async function browser() {
   const client = request.agent(backend.app);
-  const identity = (await client.get("/api/me").expect(200)).body;
+  const identity = (
+    await client.get("/api/me").set("X-Mafia-Client", "1").expect(200)
+  ).body;
   return { client, identity };
 }
 type Browser = Awaited<ReturnType<typeof browser>>["client"];
@@ -550,4 +552,89 @@ it("deletes credentials and names while retaining opponents' anonymous match rec
   expect((await gm.client.get(`/api/games/${code}`)).text).not.toContain(
     "Private Name",
   );
+});
+
+it("does not let a stranger's wrong passwords lock the owner out", async () => {
+  backend = createApp(db, { trustProxy: ["loopback"] });
+  const owner = await browser();
+  await register(owner.client);
+  const signIn = (client: Browser, address: string, secret: string) =>
+    post(client, "/auth/login", {
+      username: "aino",
+      password: secret,
+      adoptGuest: false,
+    }).set("X-Forwarded-For", address);
+  const stranger = await browser();
+  for (let attempt = 0; attempt < 12; attempt++)
+    await signIn(stranger.client, "203.0.113.9", "wrong password").expect(401);
+  await signIn(stranger.client, "203.0.113.9", "wrong password").expect(429);
+  await signIn(stranger.client, "203.0.113.9", password).expect(429);
+  const newDevice = await browser();
+  await signIn(newDevice.client, "198.51.100.7", password).expect(200);
+});
+
+it("lets sign-ins wait their turn when several arrive together", async () => {
+  const owner = await browser();
+  await register(owner.client);
+  const devices = [];
+  for (let n = 0; n < 6; n++) devices.push(await browser());
+  const answers = await Promise.all(
+    devices.map(({ client }) => login(client, "aino", password, false)),
+  );
+  expect(answers.map((answer) => answer.status)).toEqual(Array(6).fill(200));
+});
+
+it("removes unused guests after a week and keeps anyone with a table or an account", async () => {
+  const unused = await browser();
+  const host = await browser();
+  const code = (await post(host.client, "/games", {}).expect(201)).body.code;
+  await command(host.client, code, { type: "abandon" });
+  const member = await browser();
+  await register(member.client);
+  const week = 7 * 24 * 60 * 60_000;
+  expect(backend.maintenance(Date.now() + week - 60_000)).toEqual({
+    tables: 0,
+    guests: 0,
+  });
+  expect(backend.maintenance(Date.now() + week + 60_000)).toEqual({
+    tables: 0,
+    guests: 1,
+  });
+  await unused.client.get("/api/games").expect(401);
+  await host.client.get(`/api/games/${code}/report`).expect(200);
+  expect((await member.client.get("/api/me")).body.username).toBe("aino");
+});
+
+it("keeps a session that is in use alive, at most once a day", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  const { client, identity } = await browser();
+  expect((await client.get("/api/me")).headers["set-cookie"]).toBeUndefined();
+  vi.setSystemTime(Date.now() + 2 * 24 * 60 * 60_000);
+  const renewed = await client.get("/api/me").expect(200);
+  expect(renewed.headers["set-cookie"][0]).toContain("Max-Age=31536000");
+  expect(renewed.body.id).toBe(identity.id);
+  expect((await client.get("/api/me")).headers["set-cookie"]).toBeUndefined();
+});
+
+it("limits how many emails one address can cause in an hour", async () => {
+  const sent: string[] = [];
+  backend = createApp(db, {
+    publicOrigin: "https://mafia.example",
+    email: {
+      send: async (message) => {
+        sent.push(message.to);
+      },
+    },
+  });
+  const { client } = await browser();
+  for (let n = 0; n < 20; n++)
+    await post(client, "/auth/request-reset", {
+      email: `player${n}@example.com`,
+      language: "en",
+    }).expect(202);
+  await post(client, "/auth/request-reset", {
+    email: "one-more@example.com",
+    language: "en",
+  }).expect(429);
+  expect(sent).toEqual([]);
 });

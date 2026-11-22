@@ -18,15 +18,13 @@ export async function request<T>(
       signal: signal
         ? AbortSignal.any([signal, AbortSignal.timeout(20_000)])
         : AbortSignal.timeout(20_000),
+      // The server only starts a guest session for requests that carry this header.
+      headers: {
+        "X-Mafia-Client": "1",
+        ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
+      },
       ...(body !== undefined
-        ? {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "X-Mafia-Client": "1",
-            },
-            body: JSON.stringify(body),
-          }
+        ? { method: "POST", body: JSON.stringify(body) }
         : {}),
     });
   } catch {

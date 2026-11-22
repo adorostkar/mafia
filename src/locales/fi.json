@@ -371,6 +371,7 @@
     "skipped": "Ohitettu"
   },
   "error": {
+    "removed": "Pelinjohtaja poisti sinut tästä pöydästä. Et voi liittyä siihen uudelleen.",
     "emailUnavailable": "Sähköpostia ei voitu lähettää. Yritä uudelleen minuutin kuluttua.",
     "emailVerification": "Koodi on väärä, vanhentunut tai sitä on yritetty liian monta kertaa. Pyydä uusi koodi.",
     "emailInUse": "Tämä sähköpostiosoite kuuluu jo tilille. Kirjaudu sisään tai palauta tili sähköpostilla.",
@@ -387,7 +388,8 @@
     "stale": "Pelin tilanne muuttui. Tarkista uusi tilanne ennen kuin yrität uudelleen.",
     "rateLimit": "Liikaa pyyntöjä. Odota minuutti.",
     "server": "Palvelin ei voinut suorittaa pyyntöä. Yritä uudelleen.",
-    "network": "Palvelimeen ei saatu yhteyttä. Valintasi ei ehkä saapunut. Tarkista tilanne yhteyden palattua ennen uutta lähetystä.",
+    "network": "Palvelimeen ei saatu yhteyttä. Tarkista yhteys ja yritä uudelleen.",
+    "unsent": "Palvelimeen ei saatu yhteyttä. Valintasi ei ehkä saapunut. Tarkista tilanne yhteyden palattua ennen uutta lähetystä.",
     "authentication": "Tunnukset eivät kelpaa tai istuntosi on vanhentunut. Tarkista tiedot ja kirjaudu uudelleen.",
     "usernameTaken": "Käyttäjänimi on jo käytössä. Valitse toinen.",
     "weakPassword": "Käytä 15–128 merkin salasanaa.",

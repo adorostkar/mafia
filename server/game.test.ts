@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openDatabase } from "./database.js";
 import { GameStore } from "./game.js";
+import { nameSchema } from "./validation.js";
 import {
   roleIds,
   type Command,
@@ -716,5 +717,169 @@ describe("complete game lifecycle", () => {
         .size,
     ).toBe(21);
     expect(t.store.reports(randomUUID()).matches).toEqual([]);
+  });
+});
+
+describe("privacy, membership and cleanup", () => {
+  const guest = (t: ReturnType<typeof table>) => {
+    const id = randomUUID();
+    t.db
+      .prepare("INSERT INTO profiles(id,created_at) VALUES (?,?)")
+      .run(id, Date.now());
+    return id;
+  };
+  const day = 24 * 60 * 60_000;
+
+  it("tells players about a night step only while it is their own turn", () => {
+    const t = table();
+    t.start();
+    t.night();
+    t.wake("doctor");
+    const idle = t.store.view(t.code, t.user("citizen"));
+    expect(idle).toMatchObject({
+      window: null,
+      canAct: false,
+      neededTargets: 1,
+      nightProgress: { current: 0, total: 0 },
+    });
+    expect(idle.events.some((event) => event.kind === "awake")).toBe(false);
+    const doctor = t.store.view(t.code, t.user("doctor"));
+    expect(doctor).toMatchObject({ window: "doctor", canAct: true });
+    expect(doctor.events.some((event) => event.kind === "awake")).toBe(false);
+    expect(t.view()).toMatchObject({
+      window: "doctor",
+      nightProgress: { current: 2, total: 3 },
+    });
+    expect(t.view().events.some((event) => event.kind === "awake")).toBe(true);
+    t.send({ type: "abandon" });
+    expect(
+      t.store
+        .view(t.code, t.user("citizen"))
+        .events.some((event) => event.kind === "awake"),
+    ).toBe(true);
+  });
+
+  it("ends access for players who left or were removed before the start", () => {
+    const t = table();
+    const removed = guest(t);
+    const leaver = guest(t);
+    t.store.join(t.code, removed, "Removed");
+    t.store.join(t.code, leaver, "Leaver");
+    t.send({
+      type: "remove",
+      playerId: t.view().players.find((p) => p.name === "Removed")!.id,
+    });
+    t.send({ type: "leave" }, leaver);
+    expect(() => t.store.view(t.code, removed)).toThrow("removed");
+    expect(() => t.store.join(t.code, removed, "Back again")).toThrow(
+      "removed",
+    );
+    expect(() => t.store.view(t.code, leaver)).toThrow("forbidden");
+    expect(t.view().players).toHaveLength(6);
+    expect(t.view().events.filter((event) => event.kind !== "joined")).toEqual(
+      [],
+    );
+    expect(t.view().events).toHaveLength(6);
+    // Someone who left on their own may take a seat again while the lobby is open.
+    t.store.join(t.code, leaver, "Leaver");
+    expect(t.store.view(t.code, leaver).players).toHaveLength(7);
+    t.send({ type: "leave" }, leaver);
+    t.start();
+    expect(t.view().players).toHaveLength(6);
+    expect(t.store.view(t.code, t.users[0]).players).toHaveLength(6);
+    t.send({ type: "abandon" });
+    for (const outsider of [removed, leaver]) {
+      expect(() => t.store.report(t.code, outsider)).toThrow();
+      expect(t.store.reports(outsider).matches).toEqual([]);
+      expect(t.store.export(outsider)).toEqual([]);
+    }
+    const members = new Set(t.view().players.map((p) => p.id));
+    expect(
+      t.store
+        .report(t.code, t.users[0])
+        .events.every((event) =>
+          event.playerIds.every((id) => members.has(id)),
+        ),
+    ).toBe(true);
+  });
+
+  it("treats look-alike names as one name and refuses invisible names", () => {
+    const t = table(["godfather", "doctor", "citizen", "citizen"]);
+    expect(nameSchema.parse("  Ali\u200b  ")).toBe("Ali");
+    expect(nameSchema.parse("\u202eAli")).toBe("Ali");
+    expect(nameSchema.parse("Ame\u0301lie")).toBe("Am\u00e9lie");
+    expect(nameSchema.parse("علی\u200cرضا")).toBe("علی\u200cرضا");
+    expect(nameSchema.parse("Mikko 🎭")).toBe("Mikko 🎭");
+    for (const empty of ["   ", "\u200b\u200c", "\u202e\u2066"])
+      expect(nameSchema.safeParse(empty).success).toBe(false);
+    t.store.join(t.code, guest(t), nameSchema.parse("Ali"));
+    t.store.join(t.code, guest(t), nameSchema.parse("علی\u200cرضا"));
+    for (const copy of ["ALI\u200b", "Ａｌｉ", "علیرضا"])
+      expect(() =>
+        t.store.join(t.code, guest(t), nameSchema.parse(copy)),
+      ).toThrow("duplicateName");
+  });
+
+  it("counts a win on the last allowed night before calling a draw", () => {
+    const lastNight = (shoot: boolean) => {
+      const t = table(["mafia", "sniper", "citizen", "citizen"]);
+      t.start();
+      t.db.prepare("UPDATE games SET day=50 WHERE code=?").run(t.code);
+      t.night();
+      if (shoot) {
+        t.wake("sniper");
+        t.action("sniper", [t.player("mafia").id]);
+      }
+      t.dawn();
+      return t.view().winner;
+    };
+    expect(lastNight(true)).toBe("citizen");
+    expect(lastNight(false)).toBe("draw");
+  });
+
+  it("removes idle lobbies, ends stalled matches and keeps finished reports", () => {
+    const t = table();
+    t.start();
+    const lobby = t.store.create(t.gm);
+    t.store.join(lobby, guest(t), "Visitor");
+    const finished = t.store.create(t.gm);
+    t.store.command(finished, t.gm, { type: "abandon" }, 0);
+    const now = Date.now();
+    expect(t.store.prune(now + 6 * day)).toEqual([]);
+    expect(t.store.prune(now + 8 * day)).toEqual([lobby]);
+    expect(() => t.store.view(lobby, t.gm)).toThrow("notFound");
+    expect(t.view().phase).toBe("day");
+    expect(t.store.prune(now + 31 * day)).toEqual([t.code]);
+    expect(t.view()).toMatchObject({ phase: "finished", winner: "cancelled" });
+    expect(t.store.report(finished, t.gm).winner).toBe("cancelled");
+    expect(
+      t.db.prepare("SELECT COUNT(*) AS n FROM command_receipts").get()!.n,
+    ).toBe(0);
+  });
+
+  it("saves only what changed and still reloads the same match", () => {
+    const t = table();
+    t.start();
+    const written = (work: () => void) => {
+      const count = () =>
+        Number(t.db.prepare("SELECT total_changes() AS n").get()!.n);
+      const before = count();
+      work();
+      return count() - before;
+    };
+    // The match row, the public timer event, the command log entry and the retry receipt.
+    expect(written(() => t.send({ type: "timer", kind: "speaking" }))).toBe(4);
+    t.night();
+    t.wake("doctor");
+    // The match row, the new action, the command log entry and the retry receipt.
+    expect(written(() => t.action("doctor", [t.player("doctor").id]))).toBe(4);
+    t.dawn();
+    const reopened = new GameStore(t.db);
+    expect(reopened.view(t.code, t.gm)).toMatchObject({
+      phase: "day",
+      day: 2,
+      players: t.view().players,
+      actions: t.view().actions,
+    });
   });
 });

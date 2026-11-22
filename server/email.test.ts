@@ -1,5 +1,11 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { accountEmail, createResendMailer } from "./email.js";
+import {
+  accountEmail,
+  createResendMailer,
+  EmailBudgetError,
+  emailDailyLimit,
+  limitDailyEmail,
+} from "./email.js";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -88,4 +94,41 @@ it("surfaces delivery failures instead of reporting success or including provide
   await expect(mailer.send(message)).rejects.toThrow(
     "Resend returned an invalid delivery response.",
   );
+});
+
+it("keeps part of the daily email budget free for password resets", async () => {
+  let clock = 1_000;
+  let failing = false;
+  const delivered: string[] = [];
+  const mailer = limitDailyEmail(
+    {
+      send: async (message) => {
+        if (failing) throw new Error("provider down");
+        delivered.push(message.kind);
+      },
+    },
+    10,
+    () => clock,
+  );
+  const mail = (kind: "verification" | "reset") =>
+    accountEmail(kind, "aino@example.com", "004012", "en");
+  failing = true;
+  await expect(mailer.send(mail("verification"))).rejects.toThrow(
+    "provider down",
+  );
+  failing = false;
+  for (let n = 0; n < 7; n++) await mailer.send(mail("verification"));
+  await expect(mailer.send(mail("verification"))).rejects.toThrow(
+    EmailBudgetError,
+  );
+  for (let n = 0; n < 3; n++) await mailer.send(mail("reset"));
+  await expect(mailer.send(mail("reset"))).rejects.toThrow(EmailBudgetError);
+  expect(delivered).toHaveLength(10);
+  clock += 24 * 60 * 60_000;
+  await mailer.send(mail("verification"));
+  expect(delivered).toHaveLength(11);
+  expect(emailDailyLimit(undefined)).toBe(90);
+  expect(emailDailyLimit(" 250 ")).toBe(250);
+  for (const bad of ["0", "-5", "1.5", "many"])
+    expect(() => emailDailyLimit(bad)).toThrow("EMAIL_DAILY_LIMIT");
 });

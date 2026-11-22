@@ -304,6 +304,7 @@ export const errorCodes = [
   "rateLimit",
   "server",
   "network",
+  "unsent",
   "authentication",
   "usernameTaken",
   "weakPassword",
@@ -321,5 +322,6 @@ export const errorCodes = [
   "emailVerification",
   "emailInUse",
   "resetLink",
+  "removed",
 ] as const;
 export type ErrorCode = (typeof errorCodes)[number];

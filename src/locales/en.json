@@ -371,6 +371,7 @@
     "skipped": "Passed"
   },
   "error": {
+    "removed": "The Game Master removed you from this table. You cannot join it again.",
     "emailUnavailable": "Email could not be sent. Please try again in a minute.",
     "emailVerification": "This code is incorrect, expired, or has had too many attempts. Request a new code.",
     "emailInUse": "This email already belongs to an account. Sign in or use email recovery.",
@@ -387,7 +388,8 @@
     "stale": "The game changed. Review the latest state before trying again.",
     "rateLimit": "Too many requests. Please wait a minute.",
     "server": "The server could not complete this request. Please try again.",
-    "network": "Could not reach the server. Your choice may not have arrived. Reconnect and check before submitting again.",
+    "network": "Could not reach the server. Check your connection and try again.",
+    "unsent": "Could not reach the server. Your choice may not have arrived. Reconnect and check before submitting again.",
     "authentication": "The credentials are not valid, or your session has expired. Check your details and sign in again.",
     "usernameTaken": "That username is already in use. Choose another.",
     "weakPassword": "Use a password of 15–128 characters.",

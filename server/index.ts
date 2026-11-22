@@ -4,7 +4,11 @@ import express from "express";
 import { z } from "zod";
 import { openDatabase } from "./database.js";
 import { createApp } from "./app.js";
-import { createResendMailer } from "./email.js";
+import {
+  createResendMailer,
+  emailDailyLimit,
+  limitDailyEmail,
+} from "./email.js";
 
 process.umask(0o077);
 const port = z.coerce
@@ -35,16 +39,32 @@ if (publicOrigin) {
 const path = process.env.DATABASE_PATH ?? "./data/mafia.sqlite";
 mkdirSync(dirname(resolve(path)), { recursive: true, mode: 0o700 });
 const db = openDatabase(path);
+const mailer = createResendMailer(process.env);
 const { app, closeStreams, maintenance } = createApp(db, {
   secureCookies: production,
   publicOrigin,
-  email: createResendMailer(process.env),
+  email:
+    mailer &&
+    limitDailyEmail(mailer, emailDailyLimit(process.env.EMAIL_DAILY_LIMIT)),
   trustProxy: process.env.TRUST_PROXY?.split(",")
     .map((address) => address.trim())
     .filter(Boolean),
+  log: (line) => console.log(line),
 });
-maintenance();
-const cleanup = setInterval(maintenance, 60 * 60_000);
+// A cleanup problem must never stop the games that are running.
+function tidy() {
+  try {
+    const removed = maintenance();
+    if (removed.tables || removed.guests)
+      console.log(
+        `Cleanup: ${removed.tables} idle tables, ${removed.guests} unused guests`,
+      );
+  } catch (error) {
+    console.error("Cleanup failed", error);
+  }
+}
+tidy();
+const cleanup = setInterval(tidy, 60 * 60_000);
 cleanup.unref();
 app.use(
   "/assets",
@@ -53,6 +73,10 @@ app.use(
     maxAge: "1y",
     index: false,
   }),
+);
+app.use(
+  "/roles",
+  express.static(resolve("dist/roles"), { maxAge: "1d", index: false }),
 );
 app.get(["/", "/index.html"], (_req, res) => {
   res.set("Cache-Control", "no-store").sendFile(resolve("dist/index.html"));

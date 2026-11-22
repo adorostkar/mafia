@@ -22,6 +22,10 @@ import {
 
 export const living = (game: Game) =>
   game.players.filter((p) => p.alive && !p.state.left);
+// A player who left or was removed before roles were assigned is no longer part of the table.
+export const isMember = (player: Player) =>
+  !(player.state.left && player.role === null);
+const isFinished = (game: Game) => game.phase === "finished";
 export const factionOf = (player: Player): Faction =>
   player.role ? roles[player.role].faction : "citizen";
 export const currentWindow = (game: Game): NightWindow | null =>
@@ -448,8 +452,8 @@ function resolveNight(game: Game, now: number) {
   game.data.lastVote = null;
   game.timer = null;
   publish(game, "nightResolved", now, [...deaths], [...revived].join(","));
-  if (game.day > 50) finishGame(game, "draw", now);
-  else checkVictory(game, now);
+  checkVictory(game, now);
+  if (game.day > 50 && !isFinished(game)) finishGame(game, "draw", now);
 }
 
 function nextNight(game: Game, skipMissing: boolean, now: number) {
@@ -799,6 +803,7 @@ export function applyCommand(
       if (game.phase !== "lobby") throw new GameError("phase");
       const player = findPlayer(game, command.playerId);
       player.state.left = true;
+      player.state.removed = true;
       player.alive = false;
       publish(game, "removed", now, [player.id]);
       break;

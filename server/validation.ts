@@ -1,18 +1,18 @@
 import { z } from "zod";
 import { factions, roleIds, windows, type Command } from "../shared/game.js";
+import { normalizeName } from "../shared/input.js";
 import { gameDataSchema, playerStateSchema } from "./model.js";
 
 export const nameSchema = z
   .string()
-  .trim()
-  .min(1)
-  .max(40)
-  .refine(
-    (name) =>
-      !Array.from(name).some(
-        (character) =>
-          character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127,
-      ),
+  .max(200)
+  .transform(normalizeName)
+  .pipe(
+    z
+      .string()
+      .min(1)
+      .max(40)
+      .regex(/[\p{L}\p{N}\p{S}\p{P}]/u),
   );
 export const codeSchema = z
   .string()

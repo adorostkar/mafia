@@ -14,10 +14,39 @@ import { GameError } from "./errors.js";
 import { accountEmail, emailSchema, type Mailer } from "./email.js";
 
 const passwordCost = { N: 131072, r: 8, p: 1, maxmem: 192 * 1024 * 1024 };
+// Each check needs about 128 MB, so only two run at a time. Others wait for a short while.
+const maxHashing = 2;
+const maxWaiting = 24;
+const maxWaitMs = 10_000;
 let hashing = 0;
+const waiting: (() => void)[] = [];
+function acquire(): Promise<void> {
+  if (hashing < maxHashing) {
+    hashing++;
+    return Promise.resolve();
+  }
+  if (waiting.length >= maxWaiting)
+    return Promise.reject(new GameError("busy", 503));
+  return new Promise((resolve, reject) => {
+    const turn = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      waiting.splice(waiting.indexOf(turn), 1);
+      reject(new GameError("busy", 503));
+    }, maxWaitMs);
+    waiting.push(turn);
+  });
+}
+function release() {
+  const next = waiting.shift();
+  // A waiting check takes over the slot, so the count stays the same.
+  if (next) next();
+  else hashing--;
+}
 async function derive(password: string, salt: Buffer): Promise<Buffer> {
-  if (hashing >= 2) throw new GameError("busy", 503);
-  hashing++;
+  await acquire();
   try {
     return await new Promise<Buffer>((resolve, reject) => {
       scrypt(password, salt, 64, passwordCost, (error, result) =>
@@ -25,7 +54,7 @@ async function derive(password: string, salt: Buffer): Promise<Buffer> {
       );
     });
   } finally {
-    hashing--;
+    release();
   }
 }
 async function hashPassword(password: string) {
@@ -85,6 +114,8 @@ const accountSchema = z.object({
 });
 const sessionLifetime = 30 * 24 * 60 * 60_000;
 const guestLifetime = 365 * 24 * 60 * 60_000;
+const renewAfter = 24 * 60 * 60_000;
+const idleGuestLifetime = 7 * 24 * 60 * 60_000;
 
 export class AuthStore {
   constructor(
@@ -122,6 +153,17 @@ export class AuthStore {
         "SELECT 1 FROM sessions WHERE id=? AND profile_id=? AND expires_at>?",
       )
       .get(session.id, session.profileId, Date.now());
+  }
+  // A session that is still used gets a fresh lifetime, at most once a day.
+  // Returns the new cookie lifetime, or null when nothing changed.
+  renew(session: AuthSession): number | null {
+    const lifetime = session.username ? sessionLifetime : guestLifetime;
+    const now = Date.now();
+    if (session.expiresAt - now > lifetime - renewAfter) return null;
+    this.db
+      .prepare("UPDATE sessions SET expires_at=? WHERE id=?")
+      .run(now + lifetime, session.id);
+    return lifetime;
   }
   private requireSession(session: AuthSession) {
     if (!this.isValid(session)) throw new GameError("authentication", 401);
@@ -424,6 +466,7 @@ export class AuthStore {
         .prepare("DELETE FROM sessions WHERE profile_id=?")
         .run(account.profile_id);
     });
+    return account.profile_id;
   }
   private adoptGuest(source: string, destination: string) {
     if (source === destination) return;
@@ -580,7 +623,7 @@ export class AuthStore {
       this.db
         .prepare("DELETE FROM sessions WHERE profile_id=?")
         .run(account.profile_id);
-      return { recoveryCode };
+      return { recoveryCode, profileId: account.profile_id };
     });
   }
   sessions(session: AuthSession): SessionView[] {
@@ -657,5 +700,28 @@ export class AuthStore {
     this.db
       .prepare("DELETE FROM email_reset_tokens WHERE expires_at<=?")
       .run(Date.now());
+  }
+  // A guest that never hosted or joined a table has nothing to lose except the cookie.
+  // Such guests are removed after a week without a visit. Returns how many were removed.
+  pruneIdleGuests(now = Date.now()) {
+    const idle = `SELECT p.id FROM profiles p
+      WHERE NOT EXISTS (SELECT 1 FROM accounts WHERE profile_id=p.id)
+        AND NOT EXISTS (SELECT 1 FROM games WHERE gm_id=p.id)
+        AND NOT EXISTS (SELECT 1 FROM players WHERE profile_id=p.id)
+        AND NOT EXISTS (SELECT 1 FROM events WHERE actor_profile_id=p.id)
+        AND NOT EXISTS (SELECT 1 FROM command_receipts WHERE profile_id=p.id)
+        AND NOT EXISTS (SELECT 1 FROM email_registrations WHERE profile_id=p.id)
+        AND NOT EXISTS (SELECT 1 FROM sessions WHERE profile_id=p.id AND last_seen_at>?)`;
+    return transaction(this.db, () => {
+      const cutoff = now - idleGuestLifetime;
+      this.db
+        .prepare(`DELETE FROM sessions WHERE profile_id IN (${idle})`)
+        .run(cutoff);
+      return Number(
+        this.db
+          .prepare(`DELETE FROM profiles WHERE id IN (${idle})`)
+          .run(cutoff).changes,
+      );
+    });
   }
 }
