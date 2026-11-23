@@ -34,6 +34,8 @@ type Controls = {
   send: (command: Command) => Promise<boolean>;
 };
 
+type MobilePanel = "now" | "players" | "role" | "actions" | "log" | "more";
+
 function RoleSetup({ game, t, disabled, send }: Controls) {
   const [counts, setCounts] = useState<RoleCounts>(game.counts!);
   const [votingMode, setVotingMode] = useState<VotingMode>(game.votingMode);
@@ -1020,6 +1022,10 @@ export function GameTable({
   showReports,
   leaveTable,
 }: Controls & { showReports: () => void; leaveTable: () => void }) {
+  const [selectedMobilePanel, setSelectedMobilePanel] =
+    useState<MobilePanel>("now");
+  const sheetRef = useRef<HTMLDivElement>(null);
+  const returnFocusRef = useRef<HTMLElement | null>(null);
   const controls = { game, t, disabled, send };
   const title =
     game.day === 0 && game.phase === "night"
@@ -1041,17 +1047,107 @@ export function GameTable({
                 }),
               });
   const self = game.players.find((player) => player.id === game.selfId);
+  const mobilePanel =
+    (selectedMobilePanel === "role" && (game.isGm || game.phase === "lobby")) ||
+    (selectedMobilePanel === "actions" &&
+      (!game.isGm || game.phase === "lobby")) ||
+    (selectedMobilePanel === "more" && game.phase === "finished")
+      ? "now"
+      : selectedMobilePanel;
   const latest = game.events.at(-1);
+  const roundEvents = game.events
+    .filter(
+      (event) =>
+        ![
+          "joined",
+          "left",
+          "removed",
+          "configured",
+          "awake",
+          "timer",
+          "voteOpened",
+        ].includes(event.kind),
+    )
+    .slice(-3)
+    .reverse();
   const currentRules = game.rulesVersion === RULES_VERSION;
   const actionDay = game.phase === "night" ? game.day : game.day - 1;
   const heading = useRef<HTMLHeadingElement>(null);
   const lastPhase = useRef(game.phase);
+  const sheetLabel =
+    mobilePanel === "players"
+      ? t.text.players
+      : mobilePanel === "role"
+        ? t.text.yourRole
+        : mobilePanel === "actions"
+          ? t.text.actions
+          : mobilePanel === "log"
+            ? t.text.history
+            : t.text.more;
   useEffect(() => {
     if (lastPhase.current !== game.phase) {
       lastPhase.current = game.phase;
       heading.current?.focus();
     }
   }, [game.phase]);
+  useEffect(() => {
+    if (mobilePanel === "now") {
+      returnFocusRef.current?.focus();
+      returnFocusRef.current = null;
+      return;
+    }
+
+    const sheet = sheetRef.current;
+    sheet?.focus();
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setSelectedMobilePanel("now");
+        return;
+      }
+      if (event.key !== "Tab" || !sheet) return;
+      const focusable = Array.from(
+        sheet.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), summary, [tabindex="0"]',
+        ),
+      ).filter((element) => element.getClientRects().length > 0);
+      if (!focusable.length) {
+        event.preventDefault();
+        sheet.focus();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable.at(-1)!;
+      if (
+        event.shiftKey &&
+        (document.activeElement === first || document.activeElement === sheet)
+      ) {
+        event.preventDefault();
+        last.focus();
+      } else if (
+        !event.shiftKey &&
+        (document.activeElement === last || document.activeElement === sheet)
+      ) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [mobilePanel]);
+
+  function openMobilePanel(panel: MobilePanel, trigger: HTMLElement) {
+    returnFocusRef.current = trigger;
+    setSelectedMobilePanel(panel);
+  }
+
+  function closeMobilePanel() {
+    setSelectedMobilePanel("now");
+  }
+  function showNow(trigger: HTMLElement) {
+    returnFocusRef.current = trigger;
+    setSelectedMobilePanel("now");
+  }
   return (
     <>
       <header className="page-intro game-intro">
@@ -1116,7 +1212,7 @@ export function GameTable({
         <p className="notice">{t.error.legacyRules}</p>
       )}
       <div className="table-grid">
-        <div className="stack">
+        <div className="stack game-primary-stack">
           {game.isGm && game.phase === "lobby" && (
             <RoleSetup
               key={`${JSON.stringify(game.counts)}-${game.votingMode}`}
@@ -1167,18 +1263,41 @@ export function GameTable({
             self?.alive &&
             game.abilities?.hasGun && <DayGun {...controls} />}
           {game.lastVote && <VoteSummary game={game} t={t} />}
-          {!game.isGm && game.phase !== "lobby" && (
-            <PrivateRole
-              key={`${game.code}:${game.selfId}:${self?.role}`}
-              game={game}
-              t={t}
-            />
-          )}
         </div>
-        <div className="stack">
-          <Players {...controls} />
+        <div
+          className={`stack game-secondary-stack ${mobilePanel !== "now" ? "mobile-sheet-open" : ""}`}
+          id="game-mobile-sheet"
+          data-mobile-panel={mobilePanel}
+          role={mobilePanel !== "now" ? "dialog" : undefined}
+          aria-modal={mobilePanel !== "now" ? true : undefined}
+          aria-label={mobilePanel !== "now" ? sheetLabel : undefined}
+          tabIndex={mobilePanel !== "now" ? -1 : undefined}
+          ref={sheetRef}
+        >
+          <button
+            className="mobile-sheet-close secondary"
+            onClick={closeMobilePanel}
+          >
+            {t.text.close}
+          </button>
+          <div data-mobile-section="players">
+            <Players {...controls} />
+          </div>
+          {!game.isGm && game.phase !== "lobby" && (
+            <div data-mobile-section="role">
+              <PrivateRole
+                key={`${game.code}:${game.selfId}:${self?.role}`}
+                game={game}
+                t={t}
+              />
+            </div>
+          )}
           {game.isGm && game.phase !== "lobby" && (
-            <details className="panel" open={game.phase === "night"}>
+            <details
+              className="panel"
+              data-mobile-section="actions"
+              open={game.phase === "night" || mobilePanel === "actions"}
+            >
               <summary>{t.text.actions}</summary>
               <p className="sr-only" role="status">
                 {t.message("responses", {
@@ -1200,12 +1319,19 @@ export function GameTable({
               />
             </details>
           )}
-          <details className="panel">
+          <details
+            className="panel"
+            data-mobile-section="log"
+            open={mobilePanel === "log"}
+          >
             <summary>{t.text.history}</summary>
             <EventLog events={game.events} players={game.players} t={t} />
           </details>
           {game.phase !== "finished" && (
-            <section className="panel table-settings">
+            <section
+              className="panel table-settings"
+              data-mobile-section="more"
+            >
               <h2>{t.text.privacyControls}</h2>
               <p className="small muted">
                 {t.message("rulesVersion", { version: game.rulesVersion })}
@@ -1243,6 +1369,81 @@ export function GameTable({
           )}
         </div>
       </div>
+      <section
+        className="panel round-summary"
+        aria-labelledby="round-summary-title"
+      >
+        <h2 id="round-summary-title">{t.text.roundSummary}</h2>
+        {roundEvents.length ? (
+          <ol className="round-summary-list">
+            {roundEvents.map((event) => (
+              <li key={event.id}>
+                {t.message("roundEvent", {
+                  day: event.day,
+                  event: eventText(event, game.players, t),
+                })}
+              </li>
+            ))}
+          </ol>
+        ) : (
+          <p className="small muted">{t.text.noEvents}</p>
+        )}
+      </section>
+      <nav className="game-mobile-nav" aria-label={t.text.tableNavigation}>
+        <button
+          className={mobilePanel === "now" ? "active" : ""}
+          aria-current={mobilePanel === "now" ? "page" : undefined}
+          onClick={(event) => showNow(event.currentTarget)}
+        >
+          {t.text.now}
+        </button>
+        <button
+          className={mobilePanel === "players" ? "active" : ""}
+          aria-controls="game-mobile-sheet"
+          aria-expanded={mobilePanel === "players"}
+          onClick={(event) => openMobilePanel("players", event.currentTarget)}
+        >
+          {t.text.players}
+        </button>
+        {!game.isGm && game.phase !== "lobby" && (
+          <button
+            className={mobilePanel === "role" ? "active" : ""}
+            aria-controls="game-mobile-sheet"
+            aria-expanded={mobilePanel === "role"}
+            onClick={(event) => openMobilePanel("role", event.currentTarget)}
+          >
+            {t.text.yourRole}
+          </button>
+        )}
+        {game.isGm && game.phase !== "lobby" && (
+          <button
+            className={mobilePanel === "actions" ? "active" : ""}
+            aria-controls="game-mobile-sheet"
+            aria-expanded={mobilePanel === "actions"}
+            onClick={(event) => openMobilePanel("actions", event.currentTarget)}
+          >
+            {t.text.actions}
+          </button>
+        )}
+        <button
+          className={mobilePanel === "log" ? "active" : ""}
+          aria-controls="game-mobile-sheet"
+          aria-expanded={mobilePanel === "log"}
+          onClick={(event) => openMobilePanel("log", event.currentTarget)}
+        >
+          {t.text.history}
+        </button>
+        {game.phase !== "finished" && (
+          <button
+            className={mobilePanel === "more" ? "active" : ""}
+            aria-controls="game-mobile-sheet"
+            aria-expanded={mobilePanel === "more"}
+            onClick={(event) => openMobilePanel("more", event.currentTarget)}
+          >
+            {t.text.more}
+          </button>
+        )}
+      </nav>
     </>
   );
 }

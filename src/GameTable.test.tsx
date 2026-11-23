@@ -159,6 +159,76 @@ it("distinguishes guest and account seats with translated labels, not hidden rol
   expect(seats[1]).toHaveTextContent("Rekisteröity pelaaja");
 });
 
+it("keeps recent round outcomes visible and opens an accessible Players sheet", () => {
+  const { rerender } = render(
+    <GameTable
+      {...controls}
+      game={game({
+        events: [
+          {
+            id: "started",
+            kind: "started",
+            day: 0,
+            playerIds: [],
+            value: null,
+            createdAt: Date.now(),
+          },
+        ],
+      })}
+    />,
+  );
+  const summary = screen.getByRole("region", {
+    name: t.text.roundSummary,
+  });
+  expect(
+    within(summary).getByText(
+      /Roles were assigned\. Introduction night begins\./,
+    ),
+  ).toBeVisible();
+
+  const playersTab = screen.getByRole("button", { name: t.text.players });
+  fireEvent.click(playersTab);
+  const sheet = screen.getByRole("dialog", { name: t.text.players });
+  expect(
+    within(sheet).getByRole("region", { name: t.text.players }),
+  ).toBeVisible();
+  expect(
+    within(sheet).getByRole("button", { name: t.text.close }),
+  ).toBeVisible();
+
+  fireEvent.keyDown(document, { key: "Escape" });
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  expect(playersTab).toHaveFocus();
+  expect(playersTab).toHaveAttribute("aria-expanded", "false");
+
+  rerender(<GameTable {...controls} game={game()} t={translations("fa")} />);
+  expect(screen.getByRole("navigation", { name: "پیمایش بازی" })).toBeVisible();
+  expect(
+    screen.getByRole("heading", { name: "رویدادهای این دور" }),
+  ).toBeVisible();
+});
+
+it("opens the Game Master's private action list and table controls on demand", () => {
+  render(<GameTable {...controls} game={game({ isGm: true, selfId: null })} />);
+  const navigation = within(
+    screen.getByRole("navigation", { name: t.text.tableNavigation }),
+  );
+  fireEvent.click(navigation.getByRole("button", { name: t.text.actions }));
+  const actions = screen.getByRole("dialog", { name: t.text.actions });
+  expect(within(actions).getByText(t.text.noReportActions)).toBeVisible();
+
+  fireEvent.click(navigation.getByRole("button", { name: t.text.more }));
+  const more = screen.getByRole("dialog", { name: t.text.more });
+  expect(
+    within(more).getByRole("heading", { name: t.text.privacyControls }),
+  ).toBeVisible();
+  expect(
+    within(more).getByText(
+      t.message("rulesVersion", { version: "mafia-table-1" }),
+    ),
+  ).toBeVisible();
+});
+
 it.each([true, false])(
   "returns home only after a confirmed, accepted leave command (accepted: %s)",
   async (accepted) => {
@@ -541,6 +611,15 @@ it.each(["en", "fi", "fa"] as const)(
     );
     const options = { rules: { "color-contrast": { enabled: false } } };
     expect((await axe.run(container, options)).violations).toEqual([]);
+    fireEvent.click(
+      within(
+        within(container).getByRole("navigation", {
+          name: translations(language).text.tableNavigation,
+        }),
+      ).getByRole("button", { name: translations(language).text.players }),
+    );
+    expect((await axe.run(container, options)).violations).toEqual([]);
+    fireEvent.keyDown(document, { key: "Escape" });
     rerender(
       <main>
         <GameTable
